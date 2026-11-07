@@ -15,6 +15,10 @@ def normalize_name(value):
 class UserManager(BaseUserManager):
     use_in_migrations = True
 
+    @staticmethod
+    def normalize_email(email):
+        return BaseUserManager.normalize_email(email).strip().lower()
+
     def _create_user(self, email, password, **extra_fields):
         if not email:
             raise ValueError("An email address is required.")
@@ -49,6 +53,18 @@ class User(AbstractUser):
     REQUIRED_FIELDS = []
 
     objects = UserManager()
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("email"),
+                name="users_user_email_case_insensitive_unique",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        self.email = UserManager.normalize_email(self.email)
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return self.email

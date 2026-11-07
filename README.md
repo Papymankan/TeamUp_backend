@@ -3,7 +3,8 @@
 TeamUp's backend is a Django REST Framework API for students and professors to
 find teammates and collaborate on academic opportunities. The foundation
 includes a custom email-based user, profiles, skills, interests, and portfolio
-models. Feature APIs will be added in later stages.
+models. Authentication and basic account management are available through
+JWT-protected API endpoints.
 
 ## Requirements
 
@@ -64,7 +65,36 @@ The API is available at <http://127.0.0.1:8000/>. The public health check is
 - OpenAPI schema: <http://127.0.0.1:8000/api/schema/>
 - ReDoc: <http://127.0.0.1:8000/api/redoc/>
 
-The project currently uses Django's default SQLite configuration. No
-production database is configured. Django's built-in authentication and Admin
-are enabled for the custom user model, but no registration or login APIs are
-implemented. Visit <http://127.0.0.1:8000/admin/> to manage records.
+## Authentication and account endpoints
+
+Protected API endpoints use JWT authentication by default and require an access
+token, except registration, login, refresh, and password reset. Health and API
+documentation routes remain public. Send protected requests with
+`Authorization: Bearer <access-token>`.
+
+- `POST /api/auth/register/` — create an account and return account details and
+  an access/refresh token pair.
+- `POST /api/auth/login/` — authenticate with email and password.
+- `POST /api/auth/token/refresh/` — obtain a new access token; refresh tokens
+  rotate and the previous refresh token is blacklisted.
+- `POST /api/auth/logout/` — blacklist the authenticated user's refresh token.
+- `POST /api/auth/password-reset/` — request password-reset instructions.
+- `POST /api/auth/password-reset/confirm/` — confirm a reset with the emailed
+  UID and token.
+- `GET /api/account/` and `PATCH /api/account/` — read or update the
+  authenticated user's own name and email.
+
+Access tokens last 30 minutes and refresh tokens last 7 days. Blacklisting a
+refresh token does **not** immediately invalidate an already-issued access
+token; access tokens remain usable until they expire.
+
+In local development, password-reset email is printed to the terminal by
+Django's console email backend. The link uses `FRONTEND_URL` and points to
+`/reset-password/confirm/` with `uid` and `token` query parameters. For an email
+provider, configure `EMAIL_BACKEND` as Django's SMTP backend and set
+`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
+`EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL` in `.env`. Real provider delivery has
+not been configured or verified.
+
+Visit <http://127.0.0.1:8000/admin/> to manage records. Profile editing and
+other feature APIs are intentionally left for later stages.
