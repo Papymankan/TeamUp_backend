@@ -1,4 +1,5 @@
 from binascii import Error as BinasciiError
+from decimal import Decimal
 
 from django.contrib.auth import authenticate, get_user_model, password_validation
 from django.contrib.auth.tokens import default_token_generator
@@ -6,11 +7,21 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError, transaction
 from django.utils.encoding import force_str
 from django.utils.http import urlsafe_base64_decode
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework_simplejwt.settings import api_settings
 from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
-from .models import User
+from .models import (
+    Interest,
+    PortfolioItem,
+    Profile,
+    Skill,
+    User,
+    UserInterest,
+    UserSkill,
+    normalize_name,
+)
 
 
 def normalize_email(email):
@@ -203,3 +214,282 @@ class PasswordResetConfirmSerializer(StrictInputMixin, serializers.Serializer):
         user.set_password(self.validated_data["new_password"])
         user.save(update_fields=("password",))
         return user
+
+
+class ProfileSerializer(StrictInputMixin, serializers.ModelSerializer):
+    study_year = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+    )
+    graduation_year = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        min_value=1,
+    )
+    weekly_available_hours = serializers.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        min_value=Decimal("0.00"),
+        max_value=Decimal("168.00"),
+        required=False,
+    )
+
+    class Meta:
+        model = Profile
+        fields = (
+            "bio",
+            "university",
+            "major",
+            "study_year",
+            "graduation_year",
+            "weekly_available_hours",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("created_at", "updated_at")
+
+
+class SkillSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Skill
+        fields = ("id", "name", "created_at")
+        read_only_fields = ("id", "created_at")
+
+
+class UserSkillSerializer(serializers.ModelSerializer):
+    skill = SkillSerializer(read_only=True)
+    name = serializers.CharField(write_only=True)
+    proficiency_level = serializers.ChoiceField(
+        choices=UserSkill.Proficiency.choices,
+        required=False,
+        allow_blank=True,
+    )
+
+    class Meta:
+        model = UserSkill
+        fields = ("id", "skill", "name", "proficiency_level", "created_at")
+        read_only_fields = ("id", "skill", "created_at")
+
+    def validate_name(self, value):
+        value = normalize_name(value)
+        if not value:
+            raise serializers.ValidationError("Skill name is required.")
+        return value
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        name = validated_data.pop("name")
+        normalized_name = normalize_name(name)
+        skill = Skill.objects.filter(name__iexact=normalized_name).first()
+        if skill is None:
+            skill = Skill.objects.create(name=normalized_name)
+        user_skill, created = UserSkill.objects.get_or_create(
+            user=request.user,
+            skill=skill,
+            defaults={"proficiency_level": validated_data.get("proficiency_level", "")},
+        )
+        if not created and "proficiency_level" in validated_data:
+            user_skill.proficiency_level = validated_data["proficiency_level"]
+            user_skill.save(update_fields=["proficiency_level"])
+        elif created and "proficiency_level" in validated_data:
+            user_skill.proficiency_level = validated_data["proficiency_level"]
+            user_skill.save(update_fields=["proficiency_level"])
+        self.created = created
+        return user_skill
+
+
+class InterestSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Interest
+        fields = ("id", "name", "created_at")
+        read_only_fields = ("id", "created_at")
+
+
+class UserInterestSerializer(serializers.ModelSerializer):
+    interest = InterestSerializer(read_only=True)
+    name = serializers.CharField(write_only=True)
+
+    class Meta:
+        model = UserInterest
+        fields = ("id", "interest", "name", "created_at")
+        read_only_fields = ("id", "interest", "created_at")
+
+    def validate_name(self, value):
+        value = normalize_name(value)
+        if not value:
+            raise serializers.ValidationError("Interest name is required.")
+        return value
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        name = validated_data.pop("name")
+        normalized_name = normalize_name(name)
+        interest = Interest.objects.filter(name__iexact=normalized_name).first()
+        if interest is None:
+            interest = Interest.objects.create(name=normalized_name)
+        user_interest, created = UserInterest.objects.get_or_create(
+            user=request.user,
+            interest=interest,
+        )
+        self.created = created
+        return user_interest
+
+
+class PortfolioItemSerializer(StrictInputMixin, serializers.ModelSerializer):
+    item_type = serializers.ChoiceField(
+        choices=PortfolioItem.ItemType.choices,
+        required=False,
+    )
+    url = serializers.URLField(required=False, allow_blank=True)
+
+    class Meta:
+        model = PortfolioItem
+        fields = (
+            "id",
+            "title",
+            "description",
+            "url",
+            "item_type",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def create(self, validated_data):
+        request = self.context["request"]
+        profile, _ = Profile.objects.get_or_create(user=request.user)
+        validated_data.pop("profile", None)
+        return PortfolioItem.objects.create(profile=profile, **validated_data)
+
+
+class PublicProfileFieldsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Profile
+        fields = (
+            "bio",
+            "university",
+            "major",
+            "study_year",
+            "graduation_year",
+            "weekly_available_hours",
+        )
+
+
+class PublicSkillSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="skill.name")
+
+    class Meta:
+        model = UserSkill
+        fields = ("name", "proficiency_level")
+
+
+class PublicInterestSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source="interest.name")
+
+    class Meta:
+        model = UserInterest
+        fields = ("name",)
+
+
+class PublicPortfolioItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PortfolioItem
+        fields = ("title", "description", "url", "item_type", "created_at")
+
+
+class PublicProfileDetailSerializer(serializers.ModelSerializer):
+    profile = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
+    interests = serializers.SerializerMethodField()
+    portfolio = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "first_name",
+            "last_name",
+            "date_joined",
+            "profile",
+            "skills",
+            "interests",
+            "portfolio",
+        )
+
+    @extend_schema_field(PublicProfileFieldsSerializer(allow_null=True))
+    def get_profile(self, user):
+        try:
+            profile = user.profile
+        except Profile.DoesNotExist:
+            return None
+        return PublicProfileFieldsSerializer(profile).data
+
+    @extend_schema_field(PublicSkillSerializer(many=True))
+    def get_skills(self, user):
+        return PublicSkillSerializer(
+            user.user_skills.all(),
+            many=True,
+        ).data
+
+    @extend_schema_field(PublicInterestSerializer(many=True))
+    def get_interests(self, user):
+        return PublicInterestSerializer(
+            user.user_interests.all(),
+            many=True,
+        ).data
+
+    @extend_schema_field(PublicPortfolioItemSerializer(many=True))
+    def get_portfolio(self, user):
+        try:
+            profile = user.profile
+        except Profile.DoesNotExist:
+            return []
+        return PublicPortfolioItemSerializer(
+            profile.portfolio_items.all(),
+            many=True,
+        ).data
+
+
+class PublicProfileSummarySerializer(serializers.ModelSerializer):
+    university = serializers.CharField(source="profile.university")
+    major = serializers.CharField(source="profile.major")
+    study_year = serializers.IntegerField(source="profile.study_year", allow_null=True)
+    bio = serializers.SerializerMethodField()
+    skills = serializers.SerializerMethodField()
+    interests = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "first_name",
+            "last_name",
+            "university",
+            "major",
+            "study_year",
+            "bio",
+            "skills",
+            "interests",
+        )
+
+    @extend_schema_field(serializers.CharField())
+    def get_bio(self, user):
+        return user.profile.bio[:280]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_skills(self, user):
+        return [user_skill.skill.name for user_skill in user.user_skills.all()]
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_interests(self, user):
+        return [user_interest.interest.name for user_interest in user.user_interests.all()]
+
+
+class PublicProfileSearchSerializer(serializers.Serializer):
+    search = serializers.CharField(required=False, allow_blank=True)
+    university = serializers.CharField(required=False, allow_blank=True)
+    major = serializers.CharField(required=False, allow_blank=True)
+    study_year = serializers.IntegerField(required=False, min_value=1)
+    skill = serializers.CharField(required=False, allow_blank=True)
+    interest = serializers.CharField(required=False, allow_blank=True)

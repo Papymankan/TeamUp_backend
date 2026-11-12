@@ -83,6 +83,26 @@ documentation routes remain public. Send protected requests with
   UID and token.
 - `GET /api/account/` and `PATCH /api/account/` — read or update the
   authenticated user's own name and email.
+- `GET /api/profile/` and `PATCH /api/profile/` — read or update the
+  authenticated user's own profile and education information.
+- `GET /api/profile/skills/`, `POST /api/profile/skills/`, and
+  `DELETE /api/profile/skills/<skill_id>/` — manage the current user's skills.
+- `GET /api/profile/interests/`, `POST /api/profile/interests/`, and
+  `DELETE /api/profile/interests/<interest_id>/` — manage the current user's
+  interests.
+- `GET /api/profile/portfolio/`, `POST /api/profile/portfolio/`,
+  `PATCH /api/profile/portfolio/<id>/`, and
+  `DELETE /api/profile/portfolio/<id>/` — manage the current user's portfolio.
+- `GET /api/skills/` and `GET /api/interests/` — list reusable skills and
+  interests.
+- `GET /api/users/<id>/` — retrieve an authenticated user's public profile.
+- `GET /api/users/` — discover other active users with profiles.
+
+Profile discovery supports combining `search`, `university`, `major`,
+`study_year`, `skill`, and `interest` query parameters. Results are paginated
+with a default page size of 10; `page_size` may be set up to 50. Search results
+contain a brief profile summary, while the individual public-profile endpoint
+includes the profile, skills with proficiency, interests, and portfolio.
 
 Access tokens last 30 minutes and refresh tokens last 7 days. Blacklisting a
 refresh token does **not** immediately invalidate an already-issued access
@@ -96,5 +116,4 @@ provider, configure `EMAIL_BACKEND` as Django's SMTP backend and set
 `EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL` in `.env`. Real provider delivery has
 not been configured or verified.
 
-Visit <http://127.0.0.1:8000/admin/> to manage records. Profile editing and
-other feature APIs are intentionally left for later stages.
+Visit <http://127.0.0.1:8000/admin/> to manage records.
