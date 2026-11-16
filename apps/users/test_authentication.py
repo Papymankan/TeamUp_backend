@@ -1,4 +1,6 @@
 from datetime import timedelta
+from smtplib import SMTPException
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
@@ -270,6 +272,48 @@ class PasswordResetTests(TestCase):
         self.assertEqual(unknown_response.status_code, 200)
         self.assertEqual(unknown_response.data, existing_response.data)
         self.assertEqual(mail.outbox, [])
+
+    @override_settings(FRONTEND_URL=None)
+    def test_missing_frontend_url_returns_generic_response_without_sending_email(self):
+        with patch("apps.users.views.send_mail") as send_mail:
+            with self.assertLogs("apps.users.views", level="WARNING") as captured:
+                responses = [
+                    self.client.post(
+                        RESET_URL,
+                        {"email": email},
+                        format="json",
+                    )
+                    for email in (self.user.email, "unknown@example.com")
+                ]
+
+        self.assertEqual([response.status_code for response in responses], [200, 200])
+        self.assertEqual(
+            [response.data for response in responses],
+            [self._request_response(), self._request_response()],
+        )
+        send_mail.assert_not_called()
+        self.assertIn("FRONTEND_URL", captured.output[0])
+        self.assertNotIn(self.user.email, captured.output[0])
+
+    def test_delivery_failure_is_logged_without_exposing_email_contents(self):
+        private_error_detail = "private-smtp-error-detail"
+        with patch(
+            "apps.users.views.send_mail",
+            side_effect=SMTPException(private_error_detail),
+        ):
+            with self.assertLogs("apps.users.views", level="ERROR") as captured:
+                response = self.client.post(
+                    RESET_URL,
+                    {"email": self.user.email},
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, self._request_response())
+        self.assertIn(f"user_id={self.user.pk}", captured.output[0])
+        self.assertIn("SMTPException", captured.output[0])
+        self.assertNotIn(private_error_detail, captured.output[0])
+        self.assertNotIn(self.user.email, captured.output[0])
 
     def test_valid_reset_changes_password_and_token_cannot_be_reused(self):
         uid, token = self._reset_credentials()

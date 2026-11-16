@@ -1,3 +1,5 @@
+import logging
+from smtplib import SMTPException
 from urllib.parse import urlencode
 
 from django.conf import settings
@@ -44,6 +46,7 @@ from .serializers import (
 
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 class AuthenticationResponseSerializer(serializers.Serializer):
@@ -123,6 +126,19 @@ class PasswordResetRequestView(APIView):
         serializer = PasswordResetRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         email = serializer.validated_data["email"]
+        response_data = {
+            "detail": (
+                "If an account exists for that email, password reset "
+                "instructions will be sent."
+            )
+        }
+
+        if not settings.FRONTEND_URL:
+            logger.warning(
+                "Password reset email not sent because FRONTEND_URL is "
+                "unavailable or invalid."
+            )
+            return Response(response_data)
 
         users = User.objects.filter(email__iexact=email, is_active=True).order_by("pk")
         for user in users:
@@ -134,25 +150,27 @@ class PasswordResetRequestView(APIView):
                 f"{settings.FRONTEND_URL.rstrip('/')}/reset-password/confirm/"
                 f"?{urlencode({'uid': uid, 'token': token})}"
             )
-            send_mail(
-                subject="Reset your TeamUp password",
-                message=(
-                    "Use the following link to reset your TeamUp password. "
-                    "If you did not request this, you can ignore this email.\n\n"
-                    f"{reset_url}"
-                ),
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-            )
-
-        return Response(
-            {
-                "detail": (
-                    "If an account exists for that email, password reset "
-                    "instructions will be sent."
+            try:
+                send_mail(
+                    subject="Reset your TeamUp password",
+                    message=(
+                        "Use the following link to reset your TeamUp password. "
+                        "If you did not request this, you can ignore this email.\n\n"
+                        f"{reset_url}"
+                    ),
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    recipient_list=[user.email],
+                    fail_silently=False,
                 )
-            }
-        )
+            except (SMTPException, OSError) as error:
+                logger.error(
+                    "Password reset email delivery failed for user_id=%s "
+                    "(error_type=%s).",
+                    user.pk,
+                    type(error).__name__,
+                )
+
+        return Response(response_data)
 
 
 class PasswordResetConfirmView(APIView):

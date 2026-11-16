@@ -110,13 +110,17 @@ Access tokens last 30 minutes and refresh tokens last 7 days. Blacklisting a
 refresh token does **not** immediately invalidate an already-issued access
 token; access tokens remain usable until they expire.
 
-In local development, password-reset email is printed to the terminal by
-Django's console email backend. The link uses `FRONTEND_URL` and points to
-`/reset-password/confirm/` with `uid` and `token` query parameters. For an email
-provider, configure `EMAIL_BACKEND` as Django's SMTP backend and set
-`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
-`EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL` in `.env`. Real provider delivery has
-not been configured or verified.
+Password-reset email is sent through Gmail SMTP. The reset link uses
+`FRONTEND_URL` and points to `/reset-password/confirm/` with `uid` and `token`
+query parameters. Set the SMTP variables shown in `.env.example`; provide
+`EMAIL_HOST_PASSWORD` as a Gmail App Password through your environment or
+hosting dashboard, never in source control. For local development,
+`.env.example` uses the Vite origin `http://localhost:5173`. In production,
+`FRONTEND_URL` is optional until the frontend is deployed. If it is missing or
+isn't a valid non-local HTTPS URL, the backend still starts, but password-reset
+requests return the usual generic response without sending an email or
+generating a link. Set `FRONTEND_URL` to the actual deployed HTTPS frontend
+origin when it is available.
 
 Visit <http://127.0.0.1:8000/admin/> to manage records.
 
@@ -150,6 +154,13 @@ details; never put credentials in the repository):
 | `DB_HOST` | Neon hostname |
 | `DB_PORT` | Neon port (usually `5432`) |
 | `DB_SSLMODE` | `require` |
+| `EMAIL_HOST` | `smtp.gmail.com` |
+| `EMAIL_PORT` | `587` |
+| `EMAIL_USE_TLS` | `True` |
+| `EMAIL_HOST_USER` | `teamup.kntu@gmail.com` |
+| `EMAIL_HOST_PASSWORD` | Gmail App Password, entered as a secret |
+| `DEFAULT_FROM_EMAIL` | `TeamUp <teamup.kntu@gmail.com>` |
+| `FRONTEND_URL` | Optional until the frontend is deployed; then use its HTTPS origin |
 
 `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` can be updated later when the
 React app's production origin is known. Origins must include their scheme and
@@ -159,9 +170,16 @@ configured to recognize `X-Forwarded-Proto` and serve collected static files
 through WhiteNoise. The Django admin and existing API documentation routes
 remain available.
 
-Email settings are optional for startup. The default console backend does not
-deliver password-reset email to users; configure a production email provider
-and `FRONTEND_URL` if password-reset email delivery is needed.
+`EMAIL_HOST_PASSWORD` must be set to the Gmail App Password in the hosting
+dashboard before password-reset emails can be delivered. Do not commit the
+password or put it in a GitHub file. The backend can be deployed before the
+frontend; reset requests will remain generic and will not send email until a
+valid deployed `FRONTEND_URL` is configured. After setting that URL, redeploy or
+restart the service, request a reset for an account you control, and verify
+that the email arrives (including Spam) and its link opens the deployed
+frontend's reset-confirmation page. SMTP delivery failures are logged with the
+user ID and error type only; credentials, reset links, and tokens are not
+logged.
 
 ## Deploy to Wasmer Edge
 
@@ -176,11 +194,15 @@ dependencies or run migrations. Keep Wasmer's generated `after_deploy` command
 `python manage.py migrate` enabled so migrations run after deployment. The
 script uses `set -euo pipefail`, so static collection failure stops the build.
 
-Set the same application and Neon variables listed above, using your actual
-Wasmer hostname (without a scheme) for `DJANGO_ALLOWED_HOSTS`, and the frontend
-origin(s) for `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`. In particular,
-set `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=False`, `DB_ENGINE=postgresql`,
-`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, and
-`DB_SSLMODE=require`. Ensure these settings are available when Wasmer runs
-`collectstatic` as well as at runtime. Django's ASGI app is `config.asgi:application`;
-the existing HTTPS proxy header setting is retained.
+Set the same application, database, SMTP, and frontend variables listed above,
+using your actual Wasmer hostname (without a scheme) for `DJANGO_ALLOWED_HOSTS`,
+and the frontend origin(s) for `CORS_ALLOWED_ORIGINS` and
+`CSRF_TRUSTED_ORIGINS`. In particular, set `DJANGO_SECRET_KEY`,
+`DJANGO_DEBUG=False`, `DB_ENGINE=postgresql`, `DB_NAME`, `DB_USER`,
+`DB_PASSWORD`, `DB_HOST`, `DB_PORT`, `DB_SSLMODE=require`, `EMAIL_HOST`,
+`EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
+`DEFAULT_FROM_EMAIL`, and, once the frontend is deployed, its HTTPS URL as
+`FRONTEND_URL`. `FRONTEND_URL` is not required for Wasmer to deploy the backend.
+Ensure the other settings are available when Wasmer runs `collectstatic` as well
+as at runtime. Django's ASGI app is `config.asgi:application`; the existing
+HTTPS proxy header setting is retained.

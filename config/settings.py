@@ -1,6 +1,8 @@
 import os
 from datetime import timedelta
+from ipaddress import ip_address
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
@@ -175,17 +177,46 @@ SIMPLE_JWT = {
     "BLACKLIST_AFTER_ROTATION": True,
 }
 
-EMAIL_BACKEND = os.getenv(
-    "EMAIL_BACKEND",
-    "django.core.mail.backends.console.EmailBackend",
+EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL") or (
+    "TeamUp <teamup.kntu@gmail.com>"
 )
-DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL", "noreply@teamup.local")
-FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3000")
-EMAIL_HOST = os.getenv("EMAIL_HOST", "")
-EMAIL_PORT = int(os.getenv("EMAIL_PORT", "25"))
-EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER", "")
+frontend_url = (os.getenv("FRONTEND_URL") or "").strip().rstrip("/")
+if DEBUG:
+    FRONTEND_URL = frontend_url or "http://localhost:5173"
+else:
+    try:
+        frontend_url_parts = urlsplit(frontend_url)
+        frontend_hostname = frontend_url_parts.hostname
+    except ValueError:
+        frontend_url_parts = None
+        frontend_hostname = None
+
+    try:
+        frontend_is_loopback = bool(
+            frontend_hostname and ip_address(frontend_hostname).is_loopback
+        )
+    except ValueError:
+        frontend_is_loopback = bool(frontend_hostname) and (
+            frontend_hostname.lower().rstrip(".") == "localhost"
+            or frontend_hostname.lower().rstrip(".").endswith(".localhost")
+        )
+
+    if (
+        frontend_url_parts
+        and frontend_url_parts.scheme == "https"
+        and frontend_url_parts.netloc
+        and frontend_hostname
+        and not frontend_is_loopback
+    ):
+        FRONTEND_URL = frontend_url
+    else:
+        FRONTEND_URL = None
+EMAIL_HOST = os.getenv("EMAIL_HOST") or "smtp.gmail.com"
+EMAIL_PORT = int(os.getenv("EMAIL_PORT") or "587")
+EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER") or "teamup.kntu@gmail.com"
 EMAIL_HOST_PASSWORD = os.getenv("EMAIL_HOST_PASSWORD", "")
-EMAIL_USE_TLS = os.getenv("EMAIL_USE_TLS", "False").strip().lower() in {
+EMAIL_USE_TLS = (os.getenv("EMAIL_USE_TLS") or "True").strip().lower() in {
     "1",
     "true",
     "yes",
