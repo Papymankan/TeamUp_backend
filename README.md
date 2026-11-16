@@ -125,14 +125,13 @@ Visit <http://127.0.0.1:8000/admin/> to manage records.
 Create a **Web Service** from this repository and configure:
 
 - **Root Directory:** `.` (the repository root)
-- **Build Command:** `bash build.sh`
+- **Build Command:** `pip install -r requirements.txt && python manage.py collectstatic --no-input && python manage.py migrate --no-input`
 - **Start Command:** `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
 - **Health Check Path:** `/api/health/`
 
-The build script installs `requirements.txt`, collects static assets, and runs
-database migrations. Each command must succeed for the build to complete. This
-repository's root is the Django project directory, so leave Render's root
-directory at `.` (the default).
+Render's build command installs requirements, collects static assets, and
+applies migrations. This repository's root is the Django project directory, so
+leave Render's root directory at `.` (the default).
 
 Set these Render environment variables (use values from your Neon connection
 details; never put credentials in the repository):
@@ -163,3 +162,25 @@ remain available.
 Email settings are optional for startup. The default console backend does not
 deliver password-reset email to users; configure a production email provider
 and `FRONTEND_URL` if password-reset email delivery is needed.
+
+## Deploy to Wasmer Edge
+
+Configure Wasmer to install dependencies from `requirements.txt` with `uv`,
+then use:
+
+- **Build command:** `bash build.sh`
+- **Start command:** `uvicorn config.asgi:application --host 0.0.0.0 --port $PORT`
+
+Wasmer's build script only collects static files; it does not install
+dependencies or run migrations. Keep Wasmer's generated `after_deploy` command
+`python manage.py migrate` enabled so migrations run after deployment. The
+script uses `set -euo pipefail`, so static collection failure stops the build.
+
+Set the same application and Neon variables listed above, using your actual
+Wasmer hostname (without a scheme) for `DJANGO_ALLOWED_HOSTS`, and the frontend
+origin(s) for `CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS`. In particular,
+set `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=False`, `DB_ENGINE=postgresql`,
+`DB_NAME`, `DB_USER`, `DB_PASSWORD`, `DB_HOST`, `DB_PORT`, and
+`DB_SSLMODE=require`. Ensure these settings are available when Wasmer runs
+`collectstatic` as well as at runtime. Django's ASGI app is `config.asgi:application`;
+the existing HTTPS proxy header setting is retained.
