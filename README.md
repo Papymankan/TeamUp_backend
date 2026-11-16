@@ -44,7 +44,9 @@ production. Adjust `CORS_ALLOWED_ORIGINS` if your frontend runs at a different
 address. SQLite is the default (`DB_ENGINE=sqlite`). To prepare a local
 PostgreSQL connection later, set `DB_ENGINE=postgresql` and provide `DB_NAME`,
 `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_PORT`. No shared or production
-database is configured. `.env` is ignored by Git.
+database is configured. Set `DB_SSLMODE=require` for Neon; leaving
+`DB_SSLMODE` empty preserves the PostgreSQL driver's default behavior. `.env`
+is ignored by Git.
 
 ## Run the development server
 
@@ -117,3 +119,47 @@ provider, configure `EMAIL_BACKEND` as Django's SMTP backend and set
 not been configured or verified.
 
 Visit <http://127.0.0.1:8000/admin/> to manage records.
+
+## Deploy to Render with Neon
+
+Create a **Web Service** from this repository and configure:
+
+- **Root Directory:** `.` (the repository root)
+- **Build Command:** `bash build.sh`
+- **Start Command:** `gunicorn config.wsgi:application --bind 0.0.0.0:$PORT`
+- **Health Check Path:** `/api/health/`
+
+The build script installs `requirements.txt`, collects static assets, and runs
+database migrations. Each command must succeed for the build to complete. This
+repository's root is the Django project directory, so leave Render's root
+directory at `.` (the default).
+
+Set these Render environment variables (use values from your Neon connection
+details; never put credentials in the repository):
+
+| Variable | Value |
+| --- | --- |
+| `DJANGO_SECRET_KEY` | A new, long, randomly generated secret |
+| `DJANGO_DEBUG` | `False` |
+| `DJANGO_ALLOWED_HOSTS` | Your Render API hostname, e.g. `teamup-api.onrender.com` |
+| `CORS_ALLOWED_ORIGINS` | Your deployed React origin, e.g. `https://teamup-web.onrender.com` |
+| `CSRF_TRUSTED_ORIGINS` | The deployed frontend origin(s), including `https://`, comma-separated |
+| `DB_ENGINE` | `postgresql` |
+| `DB_NAME` | Neon database name |
+| `DB_USER` | Neon username |
+| `DB_PASSWORD` | Neon password |
+| `DB_HOST` | Neon hostname |
+| `DB_PORT` | Neon port (usually `5432`) |
+| `DB_SSLMODE` | `require` |
+
+`CORS_ALLOWED_ORIGINS` and `CSRF_TRUSTED_ORIGINS` can be updated later when the
+React app's production origin is known. Origins must include their scheme and
+must not include URL paths. Keep the Render API hostname in
+`DJANGO_ALLOWED_HOSTS`. Render terminates HTTPS at its proxy; Django is
+configured to recognize `X-Forwarded-Proto` and serve collected static files
+through WhiteNoise. The Django admin and existing API documentation routes
+remain available.
+
+Email settings are optional for startup. The default console backend does not
+deliver password-reset email to users; configure a production email provider
+and `FRONTEND_URL` if password-reset email delivery is needed.
