@@ -11,6 +11,8 @@ from django.utils.http import urlsafe_base64_encode
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from config.settings import resolve_frontend_url
+
 from .models import Profile
 
 
@@ -254,6 +256,42 @@ class PasswordResetTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
         self.assertIn("reset-password/confirm/", mail.outbox[0].body)
+
+    @override_settings(DEBUG=False, FRONTEND_URL="http://localhost:5173")
+    def test_production_reset_email_can_target_local_vite(self):
+        response = self.client.post(
+            RESET_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data, self._request_response())
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn(
+            "http://localhost:5173/reset-password/confirm/",
+            mail.outbox[0].body,
+        )
+
+    def test_frontend_url_validation_allows_vite_and_deployed_https_only(self):
+        self.assertEqual(
+            resolve_frontend_url("http://localhost:5173", debug=False),
+            "http://localhost:5173",
+        )
+        self.assertEqual(
+            resolve_frontend_url("https://teamup-web.example.com", debug=False),
+            "https://teamup-web.example.com",
+        )
+        for unsafe_url in (
+            "http://localhost:5174",
+            "http://127.0.0.1:5173",
+            "https://localhost:5173",
+            "http://teamup-web.example.com",
+            "http://localhost:5173/other",
+            "http://localhost:5173/?next=https://attacker.example",
+        ):
+            with self.subTest(url=unsafe_url):
+                self.assertIsNone(resolve_frontend_url(unsafe_url, debug=False))
 
     def test_unknown_email_gets_same_response_without_sending_email(self):
         existing_response = self.client.post(

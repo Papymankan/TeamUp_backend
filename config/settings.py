@@ -181,16 +181,33 @@ EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 DEFAULT_FROM_EMAIL = os.getenv("DEFAULT_FROM_EMAIL") or (
     "TeamUp <teamup.kntu@gmail.com>"
 )
-frontend_url = (os.getenv("FRONTEND_URL") or "").strip().rstrip("/")
-if DEBUG:
-    FRONTEND_URL = frontend_url or "http://localhost:5173"
-else:
+
+
+def resolve_frontend_url(value, debug):
+    frontend_url = (value or "").strip().rstrip("/")
+    if debug:
+        return frontend_url or "http://localhost:5173"
+
     try:
         frontend_url_parts = urlsplit(frontend_url)
         frontend_hostname = frontend_url_parts.hostname
+        frontend_port = frontend_url_parts.port
     except ValueError:
-        frontend_url_parts = None
-        frontend_hostname = None
+        return None
+
+    is_local_vite_url = (
+        frontend_url_parts.scheme == "http"
+        and frontend_hostname
+        and frontend_hostname.lower() == "localhost"
+        and frontend_port == 5173
+        and frontend_url_parts.username is None
+        and frontend_url_parts.password is None
+        and not frontend_url_parts.path
+        and not frontend_url_parts.query
+        and not frontend_url_parts.fragment
+    )
+    if is_local_vite_url:
+        return frontend_url
 
     try:
         frontend_is_loopback = bool(
@@ -202,16 +219,19 @@ else:
             or frontend_hostname.lower().rstrip(".").endswith(".localhost")
         )
 
-    if (
+    is_deployed_https_url = (
         frontend_url_parts
         and frontend_url_parts.scheme == "https"
         and frontend_url_parts.netloc
         and frontend_hostname
         and not frontend_is_loopback
-    ):
-        FRONTEND_URL = frontend_url
-    else:
-        FRONTEND_URL = None
+        and frontend_url_parts.username is None
+        and frontend_url_parts.password is None
+    )
+    return frontend_url if is_deployed_https_url else None
+
+
+FRONTEND_URL = resolve_frontend_url(os.getenv("FRONTEND_URL"), DEBUG)
 EMAIL_HOST = os.getenv("EMAIL_HOST") or "smtp.gmail.com"
 EMAIL_PORT = int(os.getenv("EMAIL_PORT") or "587")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER") or "teamup.kntu@gmail.com"
