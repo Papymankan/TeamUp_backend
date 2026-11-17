@@ -15,4 +15,11 @@ config = python_config(
 
 build = python_build(config)
 
-python_serve(config, build, name = "teamup")
+python_serve(
+    config,
+    build,
+    name = "teamup",
+    extra_commands = {
+        "after_deploy": "python manage.py migrate && python manage.py diagnose_smtp_tls",
+    },
+)

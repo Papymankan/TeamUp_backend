@@ -207,6 +207,13 @@ Ensure the other settings are available when Wasmer runs `collectstatic` as well
 as at runtime. Django's ASGI app is `config.asgi:application`; the existing
 HTTPS proxy header setting is retained.
 
+For a one-time SMTP certificate diagnostic, temporarily set Wasmer's
+`after_deploy` command to
+`python manage.py migrate && python manage.py diagnose_smtp_tls`, then inspect
+the deployment logs and restore the command to `python manage.py migrate`.
+The diagnostic does not authenticate or send email and is not exposed as an
+API endpoint.
+
 The root `Anybuild` file disables cross-platform Python dependency installation
 for the Docker runtime image. Anybuild then installs dependencies in its
 `/opt/venv` mount, which is copied into the runtime image; the Docker runner
