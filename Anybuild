@@ -1,0 +1,18 @@
+load("//anybuild/tools:python.bzl", "python_build", "python_config", "python_serve")
+
+config = python_config(
+    schema = 1,
+    commands = {
+        "start": "uvicorn config.asgi:application --host 0.0.0.0 --port 8080",
+    },
+    asgi_application = "config.asgi:application",
+    python_framework = "django",
+    python_server = "uvicorn",
+    python_migration_strategy = "django",
+    python_version = "3.13",
+    python_cross_platform = None,
+)
+
+build = python_build(config)
+
+python_serve(config, build, name = "teamup")

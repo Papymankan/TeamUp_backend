@@ -187,7 +187,7 @@ Configure Wasmer to install dependencies from `requirements.txt` with `uv`,
 then use:
 
 - **Build command:** `bash build.sh`
-- **Start command:** `uvicorn config.asgi:application --host 0.0.0.0 --port $PORT`
+- **Start command:** `uvicorn config.asgi:application --host 0.0.0.0 --port 8080`
 
 Wasmer's build script only collects static files; it does not install
 dependencies or run migrations. Keep Wasmer's generated `after_deploy` command
@@ -206,3 +206,10 @@ and the frontend origin(s) for `CORS_ALLOWED_ORIGINS` and
 Ensure the other settings are available when Wasmer runs `collectstatic` as well
 as at runtime. Django's ASGI app is `config.asgi:application`; the existing
 HTTPS proxy header setting is retained.
+
+The root `Anybuild` file disables cross-platform Python dependency installation
+for the Docker runtime image. Anybuild then installs dependencies in its
+`/opt/venv` mount, which is copied into the runtime image; the Docker runner
+adds `/opt/venv/bin` to runtime `PATH` for both the Uvicorn start command and
+the Django `after_deploy` migration. Use the Docker runner for this image
+configuration; the separate Wasmer/WASIX runner selects cross-platform wheels.
