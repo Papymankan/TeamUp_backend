@@ -1,14 +1,17 @@
 import logging
+from email.mime.image import MIMEImage
+from pathlib import Path
 from smtplib import SMTPException
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import send_mail
+from django.core.mail import EmailMultiAlternatives
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import force_bytes
+from django.utils.html import format_html
 from django.utils.http import urlsafe_base64_encode
 from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import generics, serializers, status
@@ -151,17 +154,65 @@ class PasswordResetRequestView(APIView):
                 f"?{urlencode({'uid': uid, 'token': token})}"
             )
             try:
-                send_mail(
+                message = EmailMultiAlternatives(
                     subject="Reset your TeamUp password",
-                    message=(
-                        "Use the following link to reset your TeamUp password. "
-                        "If you did not request this, you can ignore this email.\n\n"
-                        f"{reset_url}"
+                    body=(
+                        "We received a request to reset your TeamUp password.\n\n"
+                        "Use the Reset password button in the HTML version of "
+                        "this email. If the button does not work, copy and "
+                        f"paste this link into your browser:\n{reset_url}\n\n"
+                        "If you did not request this, you can ignore this email."
                     ),
                     from_email=settings.DEFAULT_FROM_EMAIL,
-                    recipient_list=[user.email],
-                    fail_silently=False,
+                    to=[user.email],
                 )
+                logo = MIMEImage(
+                    (
+                        Path(__file__).resolve().parent
+                        / "static"
+                        / "users"
+                        / "email"
+                        / "teamup-logo.png"
+                    ).read_bytes(),
+                    _subtype="png",
+                )
+                logo.add_header("Content-ID", "<teamup-logo>")
+                logo.add_header(
+                    "Content-Disposition",
+                    "inline",
+                    filename="teamup-logo.png",
+                )
+                message.attach(logo)
+                message.attach_alternative(
+                    format_html(
+                        '<div style="margin:0;padding:36px 16px;background-color:#f8fafc;'
+                        'font-family:Arial,Helvetica,sans-serif;color:#1e293b;">'
+                        '<table role="presentation" cellpadding="0" cellspacing="0" '
+                        'style="width:100%;max-width:520px;margin:0 auto;background:#ffffff;'
+                        'border:1px solid #e2e8f0;border-radius:16px;">'
+                        '<tr><td style="padding:36px;">'
+                        '<img src="cid:teamup-logo" alt="TeamUp" width="64" height="64" '
+                        'style="display:block;width:64px;height:64px;margin:0 0 24px;">'
+                        '<h1 style="margin:0 0 16px;font-size:24px;line-height:1.3;'
+                        'color:#0f172a;">Reset your password</h1>'
+                        '<p style="margin:0 0 28px;font-size:16px;line-height:1.6;'
+                        'color:#475569;">We received a request to reset your TeamUp '
+                        'password. Click the button below to choose a new one.</p>'
+                        '<table role="presentation" cellpadding="0" cellspacing="0">'
+                        '<tr><td bgcolor="#4f46e5" style="border-radius:8px;">'
+                        '<a href="{}" style="display:inline-block;padding:13px 22px;'
+                        'color:#ffffff;text-decoration:none;font-size:16px;'
+                        'font-weight:bold;border-radius:8px;">Reset password</a>'
+                        '</td></tr></table>'
+                        '<p style="margin:28px 0 0;font-size:14px;line-height:1.6;'
+                        'color:#64748b;">If you did not request a password reset, '
+                        'you can safely ignore this email.</p>'
+                        '</td></tr></table></div>',
+                        reset_url,
+                    ),
+                    "text/html",
+                )
+                message.send(fail_silently=False)
             except (SMTPException, OSError) as error:
                 logger.error(
                     "Password reset email delivery failed for user_id=%s "

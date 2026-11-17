@@ -244,6 +244,7 @@ class PasswordResetTests(TestCase):
             password=VALID_PASSWORD,
         )
 
+    @override_settings(FRONTEND_URL="http://localhost:5173")
     def test_reset_request_sends_email_for_existing_account(self):
         response = self.client.post(
             RESET_URL,
@@ -256,6 +257,23 @@ class PasswordResetTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
         self.assertIn("reset-password/confirm/", mail.outbox[0].body)
+        self.assertIn("copy and paste this link", mail.outbox[0].body)
+        logo = mail.outbox[0].attachments[0]
+        self.assertEqual(logo.get_content_type(), "image/png")
+        self.assertEqual(logo["Content-ID"], "<teamup-logo>")
+        self.assertEqual(logo.get_content_disposition(), "inline")
+        html_body, content_type = mail.outbox[0].alternatives[0]
+        self.assertEqual(content_type, "text/html")
+        self.assertIn('src="cid:teamup-logo"', html_body)
+        self.assertIn(">Reset password</a>", html_body)
+        self.assertIn(
+            'href="http://localhost:5173/reset-password/confirm/',
+            html_body,
+        )
+        self.assertNotIn(
+            ">http://localhost:5173/reset-password/confirm/",
+            html_body,
+        )
 
     @override_settings(DEBUG=False, FRONTEND_URL="http://localhost:5173")
     def test_production_reset_email_can_target_local_vite(self):
@@ -271,6 +289,11 @@ class PasswordResetTests(TestCase):
         self.assertIn(
             "http://localhost:5173/reset-password/confirm/",
             mail.outbox[0].body,
+        )
+        html_body, _ = mail.outbox[0].alternatives[0]
+        self.assertIn(
+            'href="http://localhost:5173/reset-password/confirm/',
+            html_body,
         )
 
     def test_frontend_url_validation_allows_vite_and_deployed_https_only(self):
@@ -313,7 +336,7 @@ class PasswordResetTests(TestCase):
 
     @override_settings(FRONTEND_URL=None)
     def test_missing_frontend_url_returns_generic_response_without_sending_email(self):
-        with patch("apps.users.views.send_mail") as send_mail:
+        with patch("apps.users.views.EmailMultiAlternatives") as email_message:
             with self.assertLogs("apps.users.views", level="WARNING") as captured:
                 responses = [
                     self.client.post(
@@ -329,14 +352,14 @@ class PasswordResetTests(TestCase):
             [response.data for response in responses],
             [self._request_response(), self._request_response()],
         )
-        send_mail.assert_not_called()
+        email_message.assert_not_called()
         self.assertIn("FRONTEND_URL", captured.output[0])
         self.assertNotIn(self.user.email, captured.output[0])
 
     def test_delivery_failure_is_logged_without_exposing_email_contents(self):
         private_error_detail = "private-smtp-error-detail"
         with patch(
-            "apps.users.views.send_mail",
+            "apps.users.views.EmailMultiAlternatives.send",
             side_effect=SMTPException(private_error_detail),
         ):
             with self.assertLogs("apps.users.views", level="ERROR") as captured:
