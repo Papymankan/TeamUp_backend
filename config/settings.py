@@ -4,11 +4,13 @@ from ipaddress import ip_address
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import certifi
 from dotenv import load_dotenv
 from django.core.exceptions import ImproperlyConfigured
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BASE_DIR / ".env")
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY")
 if not SECRET_KEY:

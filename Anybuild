@@ -4,7 +4,6 @@ config = python_config(
     schema = 1,
     commands = {
         "start": "uvicorn config.asgi:application --host 0.0.0.0 --port 8080",
-        "after_deploy": "python manage.py migrate_and_diagnose",
     },
     asgi_application = "config.asgi:application",
     python_framework = "django",
