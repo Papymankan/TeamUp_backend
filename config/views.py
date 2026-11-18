@@ -24,6 +24,6 @@ class HealthCheckView(APIView):
         return Response(
             {
                 "status": "ok",
-                "message": "TeamUp API is running",
+                "message": "سرویس TeamUp فعال است.",
             }
         )

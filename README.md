@@ -86,7 +86,8 @@ documentation routes remain public. Send protected requests with
 - `GET /api/account/` and `PATCH /api/account/` — read or update the
   authenticated user's own name and email.
 - `GET /api/profile/` and `PATCH /api/profile/` — read or update the
-  authenticated user's own profile and education information.
+  authenticated user's own profile, education information, and optional
+  `github_url` and `linkedin_url` values.
 - `GET /api/profile/skills/`, `POST /api/profile/skills/`, and
   `DELETE /api/profile/skills/<skill_id>/` — manage the current user's skills.
 - `GET /api/profile/interests/`, `POST /api/profile/interests/`, and
@@ -95,16 +96,36 @@ documentation routes remain public. Send protected requests with
 - `GET /api/profile/portfolio/`, `POST /api/profile/portfolio/`,
   `PATCH /api/profile/portfolio/<id>/`, and
   `DELETE /api/profile/portfolio/<id>/` — manage the current user's portfolio.
+- `GET /api/portfolio-item-types/` — public list of allowed portfolio item
+  types with their stable value and English and Persian names. Send the
+  returned `value` as `item_type` when creating or updating a portfolio item.
 - `GET /api/skills/` and `GET /api/interests/` — list reusable skills and
-  interests.
+  interests. Profile skill and interest submissions must match an existing
+  catalog name; unknown names are rejected rather than added automatically.
+- `GET /api/majors/` — list available major names. Set the profile's `major`
+  to one of the returned exact names; unknown names are rejected.
 - `GET /api/users/<id>/` — retrieve an authenticated user's public profile.
 - `GET /api/users/` — discover other active users with profiles.
 
-Profile discovery supports combining `search`, `university`, `major`,
-`study_year`, `skill`, and `interest` query parameters. Results are paginated
+Profile education data uses `start_year`, optional `graduation_year`, and
+`is_currently_studying`. The old `study_year` values remain stored but are no
+longer exposed or used. Profile discovery supports combining `search`,
+`university`, `major`, `start_year`, `skill`, and `interest` query parameters. Results are paginated
 with a default page size of 10; `page_size` may be set up to 50. Search results
 contain a brief profile summary, while the individual public-profile endpoint
 includes the profile, skills with proficiency, interests, and portfolio.
+
+## API messages and logs
+
+User-facing API success and error messages are in Persian. Validation errors
+remain associated with their field so the frontend can display the relevant
+message.
+
+Application and Django request logs are written to standard output, which is
+available in the Wasmer deployment logs. Unhandled API errors include a
+stack trace and request method/path; credentials, tokens, and request bodies
+are not logged. Password-reset delivery failures are logged without exposing
+the email address or SMTP exception text.
 
 Access tokens last 30 minutes and refresh tokens last 7 days. Blacklisting a
 refresh token does **not** immediately invalidate an already-issued access

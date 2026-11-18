@@ -2,7 +2,15 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase
 from rest_framework.test import APIClient
 
-from .models import Interest, PortfolioItem, Profile, Skill, UserInterest, UserSkill
+from .models import (
+    Interest,
+    Major,
+    PortfolioItem,
+    Profile,
+    Skill,
+    UserInterest,
+    UserSkill,
+)
 
 
 User = get_user_model()
@@ -27,15 +35,21 @@ class PublicProfileAPITests(TestCase):
             last_name="Ahmadi",
         )
         self.target.profile.bio = "Interested in academic research and teamwork."
+        self.target.profile.github_url = "https://github.com/ali"
+        self.target.profile.linkedin_url = "https://www.linkedin.com/in/ali"
         self.target.profile.university = "KNTU University"
-        self.target.profile.major = "Computer Engineering"
+        self.target.profile.major, _ = Major.objects.get_or_create(
+            name="Computer Engineering"
+        )
         self.target.profile.study_year = 2
+        self.target.profile.start_year = 2023
         self.target.profile.graduation_year = 2028
+        self.target.profile.is_currently_studying = True
         self.target.profile.weekly_available_hours = "15.50"
         self.target.profile.save()
 
-        react = Skill.objects.create(name="React")
-        python = Skill.objects.create(name="Python")
+        react, _ = Skill.objects.get_or_create(name="React")
+        python, _ = Skill.objects.get_or_create(name="Python")
         UserSkill.objects.create(
             user=self.target,
             skill=react,
@@ -47,8 +61,8 @@ class PublicProfileAPITests(TestCase):
             proficiency_level=UserSkill.Proficiency.INTERMEDIATE,
         )
 
-        gis = Interest.objects.create(name="GIS")
-        robotics = Interest.objects.create(name="Robotics")
+        gis, _ = Interest.objects.get_or_create(name="GIS")
+        robotics, _ = Interest.objects.get_or_create(name="Robotics")
         UserInterest.objects.create(user=self.target, interest=gis)
         UserInterest.objects.create(user=self.target, interest=robotics)
         PortfolioItem.objects.create(
@@ -77,7 +91,20 @@ class PublicProfileAPITests(TestCase):
             },
         )
         self.assertEqual(response.data["profile"]["university"], "KNTU University")
+        self.assertEqual(response.data["profile"]["major"], "Computer Engineering")
+        self.assertEqual(
+            response.data["profile"]["github_url"],
+            "https://github.com/ali",
+        )
+        self.assertEqual(
+            response.data["profile"]["linkedin_url"],
+            "https://www.linkedin.com/in/ali",
+        )
         self.assertEqual(response.data["profile"]["weekly_available_hours"], "15.50")
+        self.assertEqual(response.data["profile"]["start_year"], 2023)
+        self.assertEqual(response.data["profile"]["graduation_year"], 2028)
+        self.assertTrue(response.data["profile"]["is_currently_studying"])
+        self.assertNotIn("study_year", response.data["profile"])
         self.assertEqual(
             response.data["skills"],
             [
@@ -141,7 +168,7 @@ class PublicProfileSearchTests(TestCase):
             "Smith",
             university="KNTU University",
             major="Computer Engineering",
-            study_year=2,
+            start_year=2019,
             bio="Building React tools for GIS research.",
         )
         self.bob = self._create_user(
@@ -150,19 +177,19 @@ class PublicProfileSearchTests(TestCase):
             "Jones",
             university="Tehran University",
             major="Biology",
-            study_year=3,
+            start_year=2021,
             bio="Interested in environmental studies.",
         )
         self.viewer.profile.university = "KNTU University"
         self.viewer.profile.save()
 
-        react = Skill.objects.create(name="React")
-        react_native = Skill.objects.create(name="React Native")
+        react, _ = Skill.objects.get_or_create(name="React")
+        react_native, _ = Skill.objects.get_or_create(name="React Native")
         UserSkill.objects.create(user=self.alice, skill=react)
         UserSkill.objects.create(user=self.alice, skill=react_native)
 
-        gis = Interest.objects.create(name="GIS")
-        robotics = Interest.objects.create(name="Robotics")
+        gis, _ = Interest.objects.get_or_create(name="GIS")
+        robotics, _ = Interest.objects.get_or_create(name="Robotics")
         UserInterest.objects.create(user=self.alice, interest=gis)
         UserInterest.objects.create(user=self.alice, interest=robotics)
 
@@ -172,7 +199,7 @@ class PublicProfileSearchTests(TestCase):
             "Student",
             university="KNTU",
             major="Computer Science",
-            study_year=2,
+            start_year=2019,
         )
         self.inactive.is_active = False
         self.inactive.save(update_fields=("is_active",))
@@ -183,7 +210,7 @@ class PublicProfileSearchTests(TestCase):
             "Profile",
             university="KNTU",
             major="Computer Science",
-            study_year=2,
+            start_year=2019,
         )
         self.without_profile.profile.delete()
 
@@ -196,6 +223,8 @@ class PublicProfileSearchTests(TestCase):
             last_name=last_name,
         )
         for field, value in profile_fields.items():
+            if field == "major":
+                value, _ = Major.objects.get_or_create(name=value)
             setattr(user.profile, field, value)
         user.profile.save()
         return user
@@ -223,7 +252,7 @@ class PublicProfileSearchTests(TestCase):
         cases = (
             ({"university": "kNtU"}, self.alice.pk),
             ({"major": "computer"}, self.alice.pk),
-            ({"study_year": "2"}, self.alice.pk),
+            ({"start_year": "2019"}, self.alice.pk),
             ({"skill": "reaCt"}, self.alice.pk),
             ({"interest": "gIs"}, self.alice.pk),
         )
@@ -238,7 +267,7 @@ class PublicProfileSearchTests(TestCase):
             {
                 "university": "KNTU",
                 "major": "Computer",
-                "study_year": "2",
+                "start_year": "2019",
                 "skill": "React",
                 "interest": "o",
             },
@@ -247,10 +276,10 @@ class PublicProfileSearchTests(TestCase):
         self.assertEqual(self._ids(response), {self.alice.pk})
         self.assertEqual(response.data["count"], 1)
 
-    def test_invalid_study_year_is_rejected(self):
+    def test_invalid_start_year_is_rejected(self):
         for value in ("invalid", "0", "-1", "2.5"):
             with self.subTest(value=value):
-                response = self.client.get("/api/users/", {"study_year": value})
+                response = self.client.get("/api/users/", {"start_year": value})
                 self.assertEqual(response.status_code, 400)
 
     def test_pagination_defaults_to_ten_and_caps_page_size_at_fifty(self):
@@ -289,7 +318,7 @@ class PublicProfileSearchTests(TestCase):
                 "search",
                 "university",
                 "major",
-                "study_year",
+                "start_year",
                 "skill",
                 "interest",
                 "page",
@@ -307,8 +336,16 @@ class PublicProfileSearchTests(TestCase):
             "PublicProfileDetail"
         ]["properties"]
         self.assertTrue(
-            {"id", "first_name", "last_name", "date_joined", "profile", "skills",
-             "interests", "portfolio"}.issubset(detail_properties)
+            {
+                "id",
+                "first_name",
+                "last_name",
+                "date_joined",
+                "profile",
+                "skills",
+                "interests",
+                "portfolio",
+            }.issubset(detail_properties)
         )
         self.assertNotIn("email", detail_properties)
         self.assertNotIn("password", detail_properties)

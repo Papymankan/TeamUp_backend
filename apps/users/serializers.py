@@ -14,6 +14,7 @@ from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
 from .models import (
     Interest,
+    Major,
     PortfolioItem,
     Profile,
     Skill,
@@ -28,6 +29,10 @@ def normalize_email(email):
     return User.objects.normalize_email(email)
 
 
+MAX_USER_SKILLS = 10
+MAX_USER_INTERESTS = 3
+
+
 class StrictInputMixin:
     def to_internal_value(self, data):
         if isinstance(data, dict):
@@ -35,7 +40,7 @@ class StrictInputMixin:
             if unknown_fields:
                 raise serializers.ValidationError(
                     {
-                        field: "This field is not allowed."
+                        field: "ارسال این فیلد مجاز نیست."
                         for field in sorted(unknown_fields)
                     }
                 )
@@ -58,7 +63,7 @@ class AccountSerializer(StrictInputMixin, serializers.ModelSerializer):
                 pk=self.instance.pk
             ).exists():
                 raise serializers.ValidationError(
-                    {"email": "A user with this email already exists."}
+                    {"email": "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."}
                 )
             attrs["email"] = email
         return attrs
@@ -73,7 +78,7 @@ class AccountSerializer(StrictInputMixin, serializers.ModelSerializer):
                 pk=instance.pk
             ).exists():
                 raise serializers.ValidationError(
-                    {"email": "A user with this email already exists."}
+                    {"email": "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."}
                 ) from error
             raise
 
@@ -95,7 +100,9 @@ class RegistrationSerializer(StrictInputMixin, serializers.ModelSerializer):
     def validate_email(self, value):
         email = normalize_email(value)
         if User.objects.filter(email__iexact=email).exists():
-            raise serializers.ValidationError("A user with this email already exists.")
+            raise serializers.ValidationError(
+                "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."
+            )
         return email
 
     def validate(self, attrs):
@@ -118,7 +125,7 @@ class RegistrationSerializer(StrictInputMixin, serializers.ModelSerializer):
         except IntegrityError as error:
             if User.objects.filter(email__iexact=validated_data["email"]).exists():
                 raise serializers.ValidationError(
-                    {"email": "A user with this email already exists."}
+                    {"email": "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."}
                 ) from error
             raise
 
@@ -138,7 +145,7 @@ class LoginSerializer(StrictInputMixin, serializers.Serializer):
             password=attrs["password"],
         )
         if user is None:
-            raise serializers.ValidationError("Invalid email or password.")
+            raise serializers.ValidationError("ایمیل یا رمز عبور نادرست است.")
         attrs["user"] = user
         return attrs
 
@@ -151,13 +158,13 @@ class LogoutSerializer(StrictInputMixin, serializers.Serializer):
             token = RefreshToken(value)
         except TokenError as error:
             raise serializers.ValidationError(
-                "Invalid or expired refresh token."
+                "توکن نوسازی نامعتبر یا منقضی شده است."
             ) from error
 
         request_user = self.context["request"].user
         token_user_id = token.get(api_settings.USER_ID_CLAIM)
         if token_user_id is None or str(token_user_id) != str(request_user.pk):
-            raise serializers.ValidationError("Invalid or expired refresh token.")
+            raise serializers.ValidationError("توکن نوسازی نامعتبر یا منقضی شده است.")
         return token
 
 
@@ -191,12 +198,12 @@ class PasswordResetConfirmSerializer(StrictInputMixin, serializers.Serializer):
             get_user_model().DoesNotExist,
         ) as error:
             raise serializers.ValidationError(
-                {"token": "Invalid or expired password reset token."}
+                {"token": "لینک بازنشانی رمز عبور نامعتبر یا منقضی شده است."}
             ) from error
 
         if not default_token_generator.check_token(user, attrs["token"]):
             raise serializers.ValidationError(
-                {"token": "Invalid or expired password reset token."}
+                {"token": "لینک بازنشانی رمز عبور نامعتبر یا منقضی شده است."}
             )
 
         try:
@@ -217,7 +224,17 @@ class PasswordResetConfirmSerializer(StrictInputMixin, serializers.Serializer):
 
 
 class ProfileSerializer(StrictInputMixin, serializers.ModelSerializer):
-    study_year = serializers.IntegerField(
+    major = serializers.SlugRelatedField(
+        slug_field="name",
+        queryset=Major.objects.all(),
+        required=False,
+        allow_null=True,
+        error_messages={
+            "does_not_exist": "رشته تحصیلی انتخاب‌شده معتبر نیست.",
+            "invalid": "نام رشته تحصیلی معتبر نیست.",
+        },
+    )
+    start_year = serializers.IntegerField(
         required=False,
         allow_null=True,
         min_value=1,
@@ -239,15 +256,38 @@ class ProfileSerializer(StrictInputMixin, serializers.ModelSerializer):
         model = Profile
         fields = (
             "bio",
+            "github_url",
+            "linkedin_url",
             "university",
             "major",
-            "study_year",
+            "start_year",
             "graduation_year",
+            "is_currently_studying",
             "weekly_available_hours",
             "created_at",
             "updated_at",
         )
         read_only_fields = ("created_at", "updated_at")
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        start_year = attrs.get(
+            "start_year",
+            getattr(self.instance, "start_year", None),
+        )
+        graduation_year = attrs.get(
+            "graduation_year",
+            getattr(self.instance, "graduation_year", None),
+        )
+        if (
+            start_year is not None
+            and graduation_year is not None
+            and graduation_year < start_year
+        ):
+            raise serializers.ValidationError(
+                {"graduation_year": "سال پایان تحصیل نمی‌تواند قبل از سال شروع تحصیل باشد."}
+            )
+        return attrs
 
 
 class SkillSerializer(serializers.ModelSerializer):
@@ -274,27 +314,39 @@ class UserSkillSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         value = normalize_name(value)
         if not value:
-            raise serializers.ValidationError("Skill name is required.")
+            raise serializers.ValidationError("وارد کردن نام مهارت الزامی است.")
         return value
 
     def create(self, validated_data):
         request = self.context["request"]
         name = validated_data.pop("name")
         normalized_name = normalize_name(name)
-        skill = Skill.objects.filter(name__iexact=normalized_name).first()
-        if skill is None:
-            skill = Skill.objects.create(name=normalized_name)
-        user_skill, created = UserSkill.objects.get_or_create(
-            user=request.user,
-            skill=skill,
-            defaults={"proficiency_level": validated_data.get("proficiency_level", "")},
-        )
-        if not created and "proficiency_level" in validated_data:
-            user_skill.proficiency_level = validated_data["proficiency_level"]
-            user_skill.save(update_fields=["proficiency_level"])
-        elif created and "proficiency_level" in validated_data:
-            user_skill.proficiency_level = validated_data["proficiency_level"]
-            user_skill.save(update_fields=["proficiency_level"])
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            skill = Skill.objects.filter(name__iexact=normalized_name).first()
+            if skill is None:
+                raise serializers.ValidationError(
+                    {"name": "لطفاً یک مهارت را از فهرست مهارت‌های موجود انتخاب کنید."}
+                )
+
+            user_skill = UserSkill.objects.filter(
+                user=request.user,
+                skill=skill,
+            ).first()
+            created = user_skill is None
+            if created:
+                if UserSkill.objects.filter(user=request.user).count() >= MAX_USER_SKILLS:
+                    raise serializers.ValidationError(
+                        {"name": "حداکثر می‌توانید ۱۰ مهارت به پروفایل خود اضافه کنید."}
+                    )
+                user_skill = UserSkill.objects.create(
+                    user=request.user,
+                    skill=skill,
+                    proficiency_level=validated_data.get("proficiency_level", ""),
+                )
+            elif "proficiency_level" in validated_data:
+                user_skill.proficiency_level = validated_data["proficiency_level"]
+                user_skill.save(update_fields=["proficiency_level"])
         self.created = created
         return user_skill
 
@@ -304,6 +356,12 @@ class InterestSerializer(serializers.ModelSerializer):
         model = Interest
         fields = ("id", "name", "created_at")
         read_only_fields = ("id", "created_at")
+
+
+class MajorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Major
+        fields = ("name",)
 
 
 class UserInterestSerializer(serializers.ModelSerializer):
@@ -318,20 +376,47 @@ class UserInterestSerializer(serializers.ModelSerializer):
     def validate_name(self, value):
         value = normalize_name(value)
         if not value:
-            raise serializers.ValidationError("Interest name is required.")
+            raise serializers.ValidationError("وارد کردن نام علاقه‌مندی الزامی است.")
         return value
 
     def create(self, validated_data):
         request = self.context["request"]
         name = validated_data.pop("name")
         normalized_name = normalize_name(name)
-        interest = Interest.objects.filter(name__iexact=normalized_name).first()
-        if interest is None:
-            interest = Interest.objects.create(name=normalized_name)
-        user_interest, created = UserInterest.objects.get_or_create(
-            user=request.user,
-            interest=interest,
-        )
+        with transaction.atomic():
+            User.objects.select_for_update().get(pk=request.user.pk)
+            interest = Interest.objects.filter(name__iexact=normalized_name).first()
+            if interest is None:
+                raise serializers.ValidationError(
+                    {
+                        "name": (
+                            "لطفاً یک علاقه‌مندی را از فهرست علاقه‌مندی‌های موجود "
+                            "انتخاب کنید."
+                        )
+                    }
+                )
+
+            user_interest = UserInterest.objects.filter(
+                user=request.user,
+                interest=interest,
+            ).first()
+            created = user_interest is None
+            if created:
+                if (
+                    UserInterest.objects.filter(user=request.user).count()
+                    >= MAX_USER_INTERESTS
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "name": (
+                                "حداکثر می‌توانید ۳ علاقه‌مندی به پروفایل خود اضافه کنید."
+                            )
+                        }
+                    )
+                user_interest = UserInterest.objects.create(
+                    user=request.user,
+                    interest=interest,
+                )
         self.created = created
         return user_interest
 
@@ -340,6 +425,9 @@ class PortfolioItemSerializer(StrictInputMixin, serializers.ModelSerializer):
     item_type = serializers.ChoiceField(
         choices=PortfolioItem.ItemType.choices,
         required=False,
+        error_messages={
+            "invalid_choice": "لطفاً نوع نمونه‌کار را از گزینه‌های موجود انتخاب کنید."
+        },
     )
     url = serializers.URLField(required=False, allow_blank=True)
 
@@ -363,15 +451,26 @@ class PortfolioItemSerializer(StrictInputMixin, serializers.ModelSerializer):
         return PortfolioItem.objects.create(profile=profile, **validated_data)
 
 
+class PortfolioItemTypeSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    english_name = serializers.CharField()
+    persian_name = serializers.CharField()
+
+
 class PublicProfileFieldsSerializer(serializers.ModelSerializer):
+    major = serializers.SlugRelatedField(slug_field="name", read_only=True)
+
     class Meta:
         model = Profile
         fields = (
             "bio",
+            "github_url",
+            "linkedin_url",
             "university",
             "major",
-            "study_year",
+            "start_year",
             "graduation_year",
+            "is_currently_studying",
             "weekly_available_hours",
         )
 
@@ -453,8 +552,15 @@ class PublicProfileDetailSerializer(serializers.ModelSerializer):
 
 class PublicProfileSummarySerializer(serializers.ModelSerializer):
     university = serializers.CharField(source="profile.university")
-    major = serializers.CharField(source="profile.major")
-    study_year = serializers.IntegerField(source="profile.study_year", allow_null=True)
+    major = serializers.CharField(source="profile.major.name", allow_null=True)
+    start_year = serializers.IntegerField(source="profile.start_year", allow_null=True)
+    graduation_year = serializers.IntegerField(
+        source="profile.graduation_year",
+        allow_null=True,
+    )
+    is_currently_studying = serializers.BooleanField(
+        source="profile.is_currently_studying",
+    )
     bio = serializers.SerializerMethodField()
     skills = serializers.SerializerMethodField()
     interests = serializers.SerializerMethodField()
@@ -467,7 +573,9 @@ class PublicProfileSummarySerializer(serializers.ModelSerializer):
             "last_name",
             "university",
             "major",
-            "study_year",
+            "start_year",
+            "graduation_year",
+            "is_currently_studying",
             "bio",
             "skills",
             "interests",
@@ -490,6 +598,6 @@ class PublicProfileSearchSerializer(serializers.Serializer):
     search = serializers.CharField(required=False, allow_blank=True)
     university = serializers.CharField(required=False, allow_blank=True)
     major = serializers.CharField(required=False, allow_blank=True)
-    study_year = serializers.IntegerField(required=False, min_value=1)
+    start_year = serializers.IntegerField(required=False, min_value=1)
     skill = serializers.CharField(required=False, allow_blank=True)
     interest = serializers.CharField(required=False, allow_blank=True)

@@ -2,7 +2,16 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as DjangoUserAdmin
 
 from .forms import UserChangeForm, UserCreationForm
-from .models import Interest, PortfolioItem, Profile, Skill, User, UserInterest, UserSkill
+from .models import (
+    Interest,
+    Major,
+    PortfolioItem,
+    Profile,
+    Skill,
+    User,
+    UserInterest,
+    UserSkill,
+)
 
 
 @admin.register(User)
@@ -48,12 +57,14 @@ class ProfileAdmin(admin.ModelAdmin):
         "user",
         "university",
         "major",
-        "study_year",
+        "legacy_major",
+        "start_year",
         "graduation_year",
+        "is_currently_studying",
         "weekly_available_hours",
     )
-    list_filter = ("study_year", "graduation_year")
-    search_fields = ("user__email", "university", "major")
+    list_filter = ("start_year", "graduation_year", "is_currently_studying")
+    search_fields = ("user__email", "university", "major__name", "legacy_major")
 
 
 @admin.register(Skill)
@@ -65,6 +76,12 @@ class SkillAdmin(admin.ModelAdmin):
 @admin.register(Interest)
 class InterestAdmin(admin.ModelAdmin):
     list_display = ("name", "created_at")
+    search_fields = ("name",)
+
+
+@admin.register(Major)
+class MajorAdmin(admin.ModelAdmin):
+    list_display = ("name",)
     search_fields = ("name",)
 
 

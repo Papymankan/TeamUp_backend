@@ -5,11 +5,13 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
 from rest_framework import status
-from rest_framework.test import APIClient
+from rest_framework.test import APIClient, APIRequestFactory
 
+from config.exceptions import api_exception_handler
 from .forms import UserCreationForm
 from .models import (
     Interest,
+    Major,
     PortfolioItem,
     Profile,
     Skill,
@@ -19,6 +21,28 @@ from .models import (
 
 
 User = get_user_model()
+
+
+class APIExceptionHandlerTests(TestCase):
+    def test_unhandled_api_error_is_logged_and_returns_safe_persian_message(self):
+        request = APIRequestFactory().post("/api/example/")
+
+        try:
+            raise RuntimeError("internal failure details")
+        except RuntimeError as error:
+            with self.assertLogs("config.exceptions", level="ERROR") as captured:
+                response = api_exception_handler(error, {"request": request})
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(
+            response.data,
+            {"detail": "خطای غیرمنتظره‌ای رخ داد. لطفاً کمی بعد دوباره تلاش کنید."},
+        )
+        self.assertIn(
+            "method=POST path=/api/example/ user_id=None exception_type=RuntimeError",
+            captured.output[0],
+        )
+        self.assertIn("internal failure details", captured.output[0])
 
 
 class UserAndProfileTests(TestCase):
@@ -160,24 +184,43 @@ class StageThreeProfileAPITests(TestCase):
         self.other_client.force_authenticate(user=self.other_user)
 
     def test_profile_can_be_retrieved_and_updated(self):
+        self.user.profile.study_year = 3
+        self.user.profile.save(update_fields=["study_year"])
+        Major.objects.create(name="Computer Engineering")
+
         response = self.client.get("/api/profile/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn("study_year", response.data)
+        self.assertIsNone(response.data["start_year"])
+        self.assertFalse(response.data["is_currently_studying"])
 
         response = self.client.patch(
             "/api/profile/",
             {
                 "bio": "Researching academic opportunities.",
+                "github_url": "https://github.com/example",
+                "linkedin_url": "https://www.linkedin.com/in/example",
                 "university": "University of Tehran",
                 "major": "Computer Engineering",
-                "study_year": 3,
+                "start_year": 2022,
                 "graduation_year": 2028,
+                "is_currently_studying": True,
                 "weekly_available_hours": "15.50",
             },
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user.profile.refresh_from_db()
         self.assertEqual(self.user.profile.bio, "Researching academic opportunities.")
-        self.assertEqual(self.user.profile.major, "Computer Engineering")
+        self.assertEqual(self.user.profile.github_url, "https://github.com/example")
+        self.assertEqual(
+            self.user.profile.linkedin_url,
+            "https://www.linkedin.com/in/example",
+        )
+        self.assertEqual(self.user.profile.major.name, "Computer Engineering")
+        self.assertEqual(self.user.profile.start_year, 2022)
+        self.assertEqual(self.user.profile.graduation_year, 2028)
+        self.assertTrue(self.user.profile.is_currently_studying)
+        self.assertEqual(self.user.profile.study_year, 3)
         self.assertEqual(self.user.profile.weekly_available_hours, Decimal("15.50"))
 
     def test_profile_missing_profile_is_created_safely(self):
@@ -190,6 +233,28 @@ class StageThreeProfileAPITests(TestCase):
     def test_profile_rejects_unknown_user_field(self):
         response = self.client.patch("/api/profile/", {"user": self.other_user.pk})
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_profile_rejects_legacy_study_year_field(self):
+        response = self.client.patch("/api/profile/", {"study_year": 3})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_profile_rejects_major_not_in_catalog(self):
+        response = self.client.patch(
+            "/api/profile/",
+            {"major": "Unlisted Major"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIsNone(self.user.profile.major)
+
+    def test_major_options_are_public(self):
+        Major.objects.create(name="Computer Engineering")
+
+        response = APIClient().get("/api/majors/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.json(), [{"name": "Computer Engineering"}])
 
     def test_profile_requires_authentication(self):
         unauthenticated_client = APIClient()
@@ -216,7 +281,24 @@ class StageThreeProfileAPITests(TestCase):
                 )
                 self.assertEqual(response.status_code, code)
 
+    def test_profile_rejects_invalid_social_urls(self):
+        response = self.client.patch(
+            "/api/profile/",
+            {"github_url": "not-a-url"},
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_profile_rejects_graduation_year_before_start_year(self):
+        response = self.client.patch(
+            "/api/profile/",
+            {"start_year": 2024, "graduation_year": 2023},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("graduation_year", response.data)
+
     def test_skill_list_and_user_skill_management(self):
+        Skill.objects.create(name="React")
         available = self.client.get("/api/skills/")
         self.assertEqual(available.status_code, status.HTTP_200_OK)
 
@@ -247,7 +329,7 @@ class StageThreeProfileAPITests(TestCase):
         self.assertEqual(Skill.objects.filter(name__iexact="react").count(), 1)
 
     def test_other_user_cannot_delete_another_users_skill(self):
-        skill = Skill.objects.create(name="Django")
+        skill = Skill.objects.get(name="Django")
         UserSkill.objects.create(
             user=self.other_user,
             skill=skill,
@@ -257,7 +339,43 @@ class StageThreeProfileAPITests(TestCase):
         response = self.client.delete(f"/api/profile/skills/{skill.pk}/")
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_new_skill_name_is_rejected_without_creating_catalog_record(self):
+        response = self.client.post(
+            "/api/profile/skills/",
+            {"name": "Never-seen-before"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Skill.objects.filter(name="Never-seen-before").exists())
+
+    def test_user_cannot_add_more_than_ten_skills(self):
+        skill_names = [f"Skill Limit Test {index}" for index in range(11)]
+        Skill.objects.bulk_create([Skill(name=name) for name in skill_names])
+
+        for name in skill_names[:10]:
+            response = self.client.post("/api/profile/skills/", {"name": name})
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        duplicate_response = self.client.post(
+            "/api/profile/skills/",
+            {"name": skill_names[0]},
+        )
+        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.user.user_skills.count(), 10)
+
+        over_limit_response = self.client.post(
+            "/api/profile/skills/",
+            {"name": skill_names[10]},
+        )
+        self.assertEqual(over_limit_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            over_limit_response.data["name"],
+            "حداکثر می‌توانید ۱۰ مهارت به پروفایل خود اضافه کنید.",
+        )
+        self.assertEqual(self.user.user_skills.count(), 10)
+
     def test_interest_list_and_user_interest_management(self):
+        Interest.objects.create(name="GIS")
         available = self.client.get("/api/interests/")
         self.assertEqual(available.status_code, status.HTTP_200_OK)
 
@@ -288,6 +406,41 @@ class StageThreeProfileAPITests(TestCase):
         response = self.client.delete(f"/api/profile/interests/{interest.pk}/")
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_new_interest_name_is_rejected_without_creating_catalog_record(self):
+        response = self.client.post(
+            "/api/profile/interests/",
+            {"name": "Never-seen-before"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Interest.objects.filter(name="Never-seen-before").exists())
+
+    def test_user_cannot_add_more_than_three_interests(self):
+        interest_names = [f"Interest Limit Test {index}" for index in range(4)]
+        Interest.objects.bulk_create([Interest(name=name) for name in interest_names])
+
+        for name in interest_names[:3]:
+            response = self.client.post("/api/profile/interests/", {"name": name})
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+        duplicate_response = self.client.post(
+            "/api/profile/interests/",
+            {"name": interest_names[0]},
+        )
+        self.assertEqual(duplicate_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(self.user.user_interests.count(), 3)
+
+        over_limit_response = self.client.post(
+            "/api/profile/interests/",
+            {"name": interest_names[3]},
+        )
+        self.assertEqual(over_limit_response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(
+            over_limit_response.data["name"],
+            "حداکثر می‌توانید ۳ علاقه‌مندی به پروفایل خود اضافه کنید.",
+        )
+        self.assertEqual(self.user.user_interests.count(), 3)
+
     def test_portfolio_item_crud_and_permission_checks(self):
         create_response = self.client.post(
             "/api/profile/portfolio/",
@@ -295,10 +448,11 @@ class StageThreeProfileAPITests(TestCase):
                 "title": "TeamUp University Project",
                 "description": "Academic collaboration platform.",
                 "url": "https://github.com/example/teamup",
-                "item_type": "project",
+                "item_type": "teaching_assistant",
             },
         )
         self.assertEqual(create_response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(create_response.json()["item_type"], "teaching_assistant")
         item_id = create_response.json()["id"]
 
         list_response = self.client.get("/api/profile/portfolio/")
@@ -325,6 +479,55 @@ class StageThreeProfileAPITests(TestCase):
         self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertEqual(PortfolioItem.objects.filter(profile__user=self.user).count(), 0)
 
+    def test_portfolio_item_type_list_is_public_and_contains_bilingual_choices(self):
+        response = APIClient().get("/api/portfolio-item-types/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.json(),
+            [
+                {
+                    "value": "project",
+                    "english_name": "Project",
+                    "persian_name": "پروژه",
+                },
+                {
+                    "value": "article",
+                    "english_name": "Article",
+                    "persian_name": "مقاله",
+                },
+                {
+                    "value": "teaching_assistant",
+                    "english_name": "Teaching Assistant",
+                    "persian_name": "حل تمرین",
+                },
+                {
+                    "value": "work_experience",
+                    "english_name": "Work Experience",
+                    "persian_name": "تجربه کاری",
+                },
+                {
+                    "value": "laboratory_activity",
+                    "english_name": "Laboratory Activity",
+                    "persian_name": "فعالیت آزمایشگاهی",
+                },
+                {
+                    "value": "other",
+                    "english_name": "Other",
+                    "persian_name": "سایر",
+                },
+            ],
+        )
+
+    def test_portfolio_item_rejects_unknown_type(self):
+        response = self.client.post(
+            "/api/profile/portfolio/",
+            {"title": "Unsupported type", "item_type": "internship"},
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(PortfolioItem.objects.filter(profile__user=self.user).count(), 0)
+
 
 class ExistingEndpointTests(TestCase):
     def test_health_documentation_and_admin_routes_remain_available(self):
@@ -342,5 +545,5 @@ class ExistingEndpointTests(TestCase):
 
         self.assertEqual(
             self.client.get("/api/health/").json(),
-            {"status": "ok", "message": "TeamUp API is running"},
+            {"status": "ok", "message": "سرویس TeamUp فعال است."},
         )

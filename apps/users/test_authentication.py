@@ -70,6 +70,16 @@ class RegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
+        self.assertIn("پست الکترونیکی صحیح وارد کنید", str(response.data["email"]))
+
+    def test_password_may_be_similar_to_email(self):
+        self.payload["password"] = "student@example.com!A9"
+
+        response = self.client.post(REGISTER_URL, self.payload, format="json")
+
+        self.assertEqual(response.status_code, 201)
+        user = User.objects.get(email="student@example.com")
+        self.assertTrue(user.check_password(self.payload["password"]))
 
     def test_weak_password_is_rejected(self):
         self.payload["password"] = "password"
@@ -147,7 +157,10 @@ class LoginTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data["non_field_errors"], ["Invalid email or password."])
+        self.assertEqual(
+            response.data["non_field_errors"],
+            ["ایمیل یا رمز عبور نادرست است."],
+        )
 
 
 class TokenTests(TestCase):
@@ -185,6 +198,10 @@ class TokenTests(TestCase):
             format="json",
         )
         self.assertEqual(invalid_response.status_code, 401)
+        self.assertEqual(
+            invalid_response.data["detail"],
+            "توکن احراز هویت نامعتبر یا منقضی شده است.",
+        )
 
         expired = RefreshToken.for_user(self.user)
         expired.set_exp(lifetime=timedelta(seconds=-1))
@@ -194,6 +211,10 @@ class TokenTests(TestCase):
             format="json",
         )
         self.assertEqual(expired_response.status_code, 401)
+        self.assertEqual(
+            expired_response.data["detail"],
+            "توکن احراز هویت نامعتبر یا منقضی شده است.",
+        )
 
     def test_logout_requires_authentication_and_blacklists_refresh_token(self):
         refresh = str(RefreshToken.for_user(self.user))
@@ -211,6 +232,10 @@ class TokenTests(TestCase):
             format="json",
         )
         self.assertEqual(logout_response.status_code, 200)
+        self.assertEqual(
+            logout_response.data["detail"],
+            "با موفقیت از حساب کاربری خارج شدید.",
+        )
 
         refresh_response = self.client.post(
             REFRESH_URL,
@@ -257,7 +282,7 @@ class PasswordResetTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
         self.assertIn("reset-password/confirm/", mail.outbox[0].body)
-        self.assertIn("copy and paste this link", mail.outbox[0].body)
+        self.assertIn("پیوند زیر را در مرورگر کپی کنید", mail.outbox[0].body)
         logo = mail.outbox[0].attachments[0]
         self.assertEqual(logo.get_content_type(), "image/png")
         self.assertEqual(logo["Content-ID"], "<teamup-logo>")
@@ -265,7 +290,7 @@ class PasswordResetTests(TestCase):
         html_body, content_type = mail.outbox[0].alternatives[0]
         self.assertEqual(content_type, "text/html")
         self.assertIn('src="cid:teamup-logo"', html_body)
-        self.assertIn(">Reset password</a>", html_body)
+        self.assertIn(">بازنشانی گذرواژه</a>", html_body)
         self.assertIn(
             'href="http://localhost:5173/reset-password/confirm/',
             html_body,
@@ -391,6 +416,7 @@ class PasswordResetTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password("NewStrongPassword456!"))
+        self.assertEqual(response.data["detail"], "گذرواژه با موفقیت بازنشانی شد.")
 
         reused_response = self.client.post(
             RESET_CONFIRM_URL,
@@ -456,8 +482,8 @@ class PasswordResetTests(TestCase):
     def _request_response():
         return {
             "detail": (
-                "If an account exists for that email, password reset "
-                "instructions will be sent."
+                "اگر حساب کاربری فعالی با این ایمیل وجود داشته باشد، "
+                "راهنمای بازنشانی گذرواژه برای شما ارسال خواهد شد."
             )
         }
 

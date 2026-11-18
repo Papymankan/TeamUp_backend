@@ -4,7 +4,7 @@ from django.contrib.auth.base_user import BaseUserManager
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.models.functions import Lower
 
 
@@ -70,6 +70,27 @@ class User(AbstractUser):
         return self.email
 
 
+class Major(models.Model):
+    name = models.CharField(max_length=255)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("name"),
+                name="users_major_name_case_insensitive_unique",
+            )
+        ]
+        ordering = ["name"]
+
+    def save(self, *args, **kwargs):
+        self.name = normalize_name(self.name)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return self.name
+
+
 class Profile(models.Model):
     user = models.OneToOneField(
         User,
@@ -77,9 +98,23 @@ class Profile(models.Model):
         related_name="profile",
     )
     bio = models.TextField(blank=True)
+    github_url = models.URLField(blank=True)
+    linkedin_url = models.URLField(blank=True)
     university = models.CharField(max_length=255, blank=True)
-    major = models.CharField(max_length=255, blank=True)
+    legacy_major = models.CharField(max_length=255, blank=True)
+    major = models.ForeignKey(
+        Major,
+        on_delete=models.PROTECT,
+        related_name="profiles",
+        null=True,
+        blank=True,
+    )
     study_year = models.PositiveSmallIntegerField(
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(1)],
+    )
+    start_year = models.PositiveSmallIntegerField(
         null=True,
         blank=True,
         validators=[MinValueValidator(1)],
@@ -89,6 +124,7 @@ class Profile(models.Model):
         blank=True,
         validators=[MinValueValidator(1)],
     )
+    is_currently_studying = models.BooleanField(default=False)
     weekly_available_hours = models.DecimalField(
         max_digits=5,
         decimal_places=2,
@@ -116,6 +152,16 @@ class Profile(models.Model):
                 condition=Q(graduation_year__isnull=True)
                 | Q(graduation_year__gte=1),
                 name="users_profile_graduation_year_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(start_year__isnull=True) | Q(start_year__gte=1),
+                name="users_profile_start_year_positive",
+            ),
+            models.CheckConstraint(
+                condition=Q(start_year__isnull=True)
+                | Q(graduation_year__isnull=True)
+                | Q(graduation_year__gte=F("start_year")),
+                name="users_profile_graduation_not_before_start",
             ),
         ]
 
@@ -229,7 +275,10 @@ class UserInterest(models.Model):
 class PortfolioItem(models.Model):
     class ItemType(models.TextChoices):
         PROJECT = "project", "Project"
+        ARTICLE = "article", "Article"
+        TEACHING_ASSISTANT = "teaching_assistant", "Teaching Assistant"
         WORK_EXPERIENCE = "work_experience", "Work Experience"
+        LABORATORY_ACTIVITY = "laboratory_activity", "Laboratory Activity"
         OTHER = "other", "Other"
 
     profile = models.ForeignKey(

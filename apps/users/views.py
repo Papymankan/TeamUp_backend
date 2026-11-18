@@ -22,6 +22,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 
 from .models import (
     Interest,
+    Major,
     PortfolioItem,
     Profile,
     Skill,
@@ -34,9 +35,11 @@ from .serializers import (
     InterestSerializer,
     LoginSerializer,
     LogoutSerializer,
+    MajorSerializer,
     PasswordResetConfirmSerializer,
     PasswordResetRequestSerializer,
     PortfolioItemSerializer,
+    PortfolioItemTypeSerializer,
     ProfileSerializer,
     PublicProfileDetailSerializer,
     PublicProfileSearchSerializer,
@@ -83,6 +86,7 @@ class RegistrationView(APIView):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        logger.info("User registration completed user_id=%s", user.pk)
         return Response(token_response(user), status=status.HTTP_201_CREATED)
 
 
@@ -97,7 +101,9 @@ class LoginView(APIView):
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-        return Response(token_response(serializer.validated_data["user"]))
+        user = serializer.validated_data["user"]
+        logger.info("User login succeeded user_id=%s", user.pk)
+        return Response(token_response(user))
 
 
 class LogoutView(APIView):
@@ -114,7 +120,8 @@ class LogoutView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         serializer.validated_data["refresh"].blacklist()
-        return Response({"detail": "Successfully logged out."})
+        logger.info("User logout completed user_id=%s", request.user.pk)
+        return Response({"detail": "با موفقیت از حساب کاربری خارج شدید."})
 
 
 class PasswordResetRequestView(APIView):
@@ -131,8 +138,8 @@ class PasswordResetRequestView(APIView):
         email = serializer.validated_data["email"]
         response_data = {
             "detail": (
-                "If an account exists for that email, password reset "
-                "instructions will be sent."
+                "اگر حساب کاربری فعالی با این ایمیل وجود داشته باشد، "
+                "راهنمای بازنشانی گذرواژه برای شما ارسال خواهد شد."
             )
         }
 
@@ -155,13 +162,14 @@ class PasswordResetRequestView(APIView):
             )
             try:
                 message = EmailMultiAlternatives(
-                    subject="Reset your TeamUp password",
+                    subject="بازنشانی گذرواژه TeamUp",
                     body=(
-                        "We received a request to reset your TeamUp password.\n\n"
-                        "Use the Reset password button in the HTML version of "
-                        "this email. If the button does not work, copy and "
-                        f"paste this link into your browser:\n{reset_url}\n\n"
-                        "If you did not request this, you can ignore this email."
+                        "درخواست بازنشانی گذرواژه حساب TeamUp شما دریافت شد.\n\n"
+                        "برای انتخاب گذرواژه جدید، روی دکمه «بازنشانی گذرواژه» "
+                        "در نسخه HTML این ایمیل کلیک کنید. اگر دکمه کار نکرد، "
+                        f"پیوند زیر را در مرورگر کپی کنید:\n{reset_url}\n\n"
+                        "اگر شما این درخواست را ثبت نکرده‌اید، این ایمیل را "
+                        "نادیده بگیرید."
                     ),
                     from_email=settings.DEFAULT_FROM_EMAIL,
                     to=[user.email],
@@ -185,40 +193,44 @@ class PasswordResetRequestView(APIView):
                 message.attach(logo)
                 message.attach_alternative(
                     format_html(
-                        '<div style="margin:0;padding:36px 16px;background-color:#f8fafc;'
+                        '<div lang="fa" dir="rtl" style="margin:0;padding:36px 16px;'
+                        'background-color:#f8fafc;direction:rtl;text-align:right;'
                         'font-family:Arial,Helvetica,sans-serif;color:#1e293b;">'
                         '<table role="presentation" cellpadding="0" cellspacing="0" '
                         'style="width:100%;max-width:520px;margin:0 auto;background:#ffffff;'
                         'border:1px solid #e2e8f0;border-radius:16px;">'
                         '<tr><td style="padding:36px;">'
-                        '<img src="cid:teamup-logo" alt="TeamUp" width="64" height="64" '
-                        'style="display:block;width:64px;height:64px;margin:0 0 24px;">'
+                        '<img src="cid:teamup-logo" alt="لوگوی TeamUp" width="64" '
+                        'height="64" style="display:block;width:64px;height:64px;'
+                        'margin:0 0 24px;">'
                         '<h1 style="margin:0 0 16px;font-size:24px;line-height:1.3;'
-                        'color:#0f172a;">Reset your password</h1>'
+                        'color:#0f172a;">بازنشانی گذرواژه</h1>'
                         '<p style="margin:0 0 28px;font-size:16px;line-height:1.6;'
-                        'color:#475569;">We received a request to reset your TeamUp '
-                        'password. Click the button below to choose a new one.</p>'
+                        'color:#475569;">درخواست بازنشانی گذرواژه حساب TeamUp شما '
+                        'دریافت شد. برای انتخاب گذرواژه جدید، روی دکمه زیر کلیک کنید.</p>'
                         '<table role="presentation" cellpadding="0" cellspacing="0">'
                         '<tr><td bgcolor="#4f46e5" style="border-radius:8px;">'
                         '<a href="{}" style="display:inline-block;padding:13px 22px;'
                         'color:#ffffff;text-decoration:none;font-size:16px;'
-                        'font-weight:bold;border-radius:8px;">Reset password</a>'
+                        'font-weight:bold;border-radius:8px;">بازنشانی گذرواژه</a>'
                         '</td></tr></table>'
                         '<p style="margin:28px 0 0;font-size:14px;line-height:1.6;'
-                        'color:#64748b;">If you did not request a password reset, '
-                        'you can safely ignore this email.</p>'
+                        'color:#64748b;">اگر شما این درخواست را ثبت نکرده‌اید، '
+                        'می‌توانید این ایمیل را نادیده بگیرید.</p>'
                         '</td></tr></table></div>',
                         reset_url,
                     ),
                     "text/html",
                 )
                 message.send(fail_silently=False)
+                logger.info("Password reset email sent user_id=%s", user.pk)
             except (SMTPException, OSError) as error:
                 logger.error(
                     "Password reset email delivery failed for user_id=%s "
                     "(error_type=%s).",
                     user.pk,
                     type(error).__name__,
+                    exc_info=(type(error), None, error.__traceback__),
                 )
 
         return Response(response_data)
@@ -236,7 +248,11 @@ class PasswordResetConfirmView(APIView):
         serializer = PasswordResetConfirmSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save()
-        return Response({"detail": "Password has been reset successfully."})
+        logger.info(
+            "Password reset completed user_id=%s",
+            serializer.validated_data["user"].pk,
+        )
+        return Response({"detail": "گذرواژه با موفقیت بازنشانی شد."})
 
 
 class AccountView(generics.RetrieveUpdateAPIView):
@@ -262,6 +278,7 @@ class ProfileView(APIView):
         serializer = ProfileSerializer(profile, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        logger.info("Profile updated user_id=%s", request.user.pk)
         return Response(serializer.data)
 
 
@@ -311,6 +328,12 @@ class AvailableInterestListView(generics.ListAPIView):
     queryset = Interest.objects.all().order_by("name")
 
 
+class AvailableMajorListView(generics.ListAPIView):
+    serializer_class = MajorSerializer
+    permission_classes = [AllowAny]
+    queryset = Major.objects.all().order_by("name")
+
+
 class UserInterestListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -353,11 +376,36 @@ class PortfolioItemListCreateView(generics.ListCreateAPIView):
         return PortfolioItem.objects.filter(profile__user=self.request.user).order_by("-created_at")
 
 
+class PortfolioItemTypeListView(APIView):
+    permission_classes = [AllowAny]
+
+    @extend_schema(responses={200: PortfolioItemTypeSerializer(many=True)})
+    def get(self, request):
+        persian_names = {
+            PortfolioItem.ItemType.PROJECT: "پروژه",
+            PortfolioItem.ItemType.ARTICLE: "مقاله",
+            PortfolioItem.ItemType.TEACHING_ASSISTANT: "حل تمرین",
+            PortfolioItem.ItemType.WORK_EXPERIENCE: "تجربه کاری",
+            PortfolioItem.ItemType.LABORATORY_ACTIVITY: "فعالیت آزمایشگاهی",
+            PortfolioItem.ItemType.OTHER: "سایر",
+        }
+        return Response(
+            [
+                {
+                    "value": value,
+                    "english_name": english_name,
+                    "persian_name": persian_names[value],
+                }
+                for value, english_name in PortfolioItem.ItemType.choices
+            ]
+        )
+
+
 PUBLIC_PROFILE_SEARCH_PARAMETERS = [
     OpenApiParameter("search", str, OpenApiParameter.QUERY, description="Case-insensitive name, university, major, or bio search."),
     OpenApiParameter("university", str, OpenApiParameter.QUERY, description="Case-insensitive partial university match."),
     OpenApiParameter("major", str, OpenApiParameter.QUERY, description="Case-insensitive partial major match."),
-    OpenApiParameter("study_year", int, OpenApiParameter.QUERY, description="Filter by positive study year."),
+    OpenApiParameter("start_year", int, OpenApiParameter.QUERY, description="Filter by calendar start year."),
     OpenApiParameter("skill", str, OpenApiParameter.QUERY, description="Case-insensitive partial skill-name match."),
     OpenApiParameter("interest", str, OpenApiParameter.QUERY, description="Case-insensitive partial interest-name match."),
     OpenApiParameter("page", int, OpenApiParameter.QUERY, description="Page number."),
@@ -395,7 +443,7 @@ class PublicProfileListView(generics.ListAPIView):
                 Q(first_name__icontains=search)
                 | Q(last_name__icontains=search)
                 | Q(profile__university__icontains=search)
-                | Q(profile__major__icontains=search)
+                | Q(profile__major__name__icontains=search)
                 | Q(profile__bio__icontains=search)
             )
 
@@ -405,10 +453,10 @@ class PublicProfileListView(generics.ListAPIView):
 
         major = values.get("major", "").strip()
         if major:
-            queryset = queryset.filter(profile__major__icontains=major)
+            queryset = queryset.filter(profile__major__name__icontains=major)
 
-        if "study_year" in values:
-            queryset = queryset.filter(profile__study_year=values["study_year"])
+        if "start_year" in values:
+            queryset = queryset.filter(profile__start_year=values["start_year"])
 
         skill = values.get("skill", "").strip()
         if skill:
