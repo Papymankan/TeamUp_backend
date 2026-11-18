@@ -93,8 +93,8 @@ Send protected requests with
 - `GET /api/account/` and `PATCH /api/account/` — read or update the
   authenticated user's own name and email.
 - `GET /api/profile/` and `PATCH /api/profile/` — read or update the
-  authenticated user's own profile, education information, and optional
-  `github_url` and `linkedin_url` values.
+  authenticated user's own profile, including their short `headline`,
+  education information, and optional `github_url` and `linkedin_url` values.
 - `GET /api/profile/skills/`, `POST /api/profile/skills/`, and
   `DELETE /api/profile/skills/<skill_id>/` — manage the current user's skills.
 - `GET /api/profile/interests/`, `POST /api/profile/interests/`, and
@@ -111,8 +111,10 @@ Send protected requests with
   catalog name; unknown names are rejected rather than added automatically.
 - `GET /api/majors/` — list available major names. Set the profile's `major`
   to one of the returned exact names; unknown names are rejected.
-- `GET /api/users/<id>/` — retrieve an authenticated user's public profile.
-- `GET /api/users/` — discover other active users with profiles.
+- `GET /api/users/<id>/` — retrieve an authenticated user's public profile,
+  including the headline.
+- `GET /api/users/` — discover other active users with profiles and their
+  headlines.
 
 Profile education data uses `start_year`, optional `graduation_year`, and
 `is_currently_studying`. The old `study_year` values remain stored but are no

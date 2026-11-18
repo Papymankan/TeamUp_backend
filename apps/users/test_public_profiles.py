@@ -35,6 +35,7 @@ class PublicProfileAPITests(TestCase):
             last_name="Ahmadi",
         )
         self.target.profile.bio = "Interested in academic research and teamwork."
+        self.target.profile.headline = "Building products with data and design."
         self.target.profile.github_url = "https://github.com/ali"
         self.target.profile.linkedin_url = "https://www.linkedin.com/in/ali"
         self.target.profile.university = "KNTU University"
@@ -91,6 +92,10 @@ class PublicProfileAPITests(TestCase):
             },
         )
         self.assertEqual(response.data["profile"]["university"], "KNTU University")
+        self.assertEqual(
+            response.data["profile"]["headline"],
+            "Building products with data and design.",
+        )
         self.assertEqual(response.data["profile"]["major"], "Computer Engineering")
         self.assertEqual(
             response.data["profile"]["github_url"],
@@ -169,6 +174,7 @@ class PublicProfileSearchTests(TestCase):
             university="KNTU University",
             major="Computer Engineering",
             start_year=2019,
+            headline="Building useful web tools.",
             bio="Building React tools for GIS research.",
         )
         self.bob = self._create_user(
@@ -241,6 +247,10 @@ class PublicProfileSearchTests(TestCase):
         self.assertEqual(returned_ids, {self.alice.pk, self.bob.pk})
         self.assertEqual(response.data["count"], 2)
         self.assertNotIn("email", response.data["results"][0])
+        alice_card = next(
+            result for result in response.data["results"] if result["id"] == self.alice.pk
+        )
+        self.assertEqual(alice_card["headline"], "Building useful web tools.")
 
     def test_general_search_matches_name_university_major_and_bio(self):
         for term in ("ali", "smith", "kntu", "engineering", "GIS research"):
@@ -347,5 +357,13 @@ class PublicProfileSearchTests(TestCase):
                 "portfolio",
             }.issubset(detail_properties)
         )
+        summary_properties = response.data["components"]["schemas"][
+            "PublicProfileSummary"
+        ]["properties"]
+        self.assertIn("headline", summary_properties)
+        profile_properties = response.data["components"]["schemas"][
+            "PublicProfileFields"
+        ]["properties"]
+        self.assertIn("headline", profile_properties)
         self.assertNotIn("email", detail_properties)
         self.assertNotIn("password", detail_properties)

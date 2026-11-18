@@ -97,6 +97,7 @@ class Profile(models.Model):
         on_delete=models.CASCADE,
         related_name="profile",
     )
+    headline = models.CharField(max_length=220, blank=True)
     bio = models.TextField(blank=True)
     github_url = models.URLField(blank=True)
     linkedin_url = models.URLField(blank=True)

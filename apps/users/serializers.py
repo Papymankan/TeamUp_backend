@@ -270,6 +270,7 @@ class ProfileSerializer(StrictInputMixin, serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = (
+            "headline",
             "bio",
             "github_url",
             "linkedin_url",
@@ -478,6 +479,7 @@ class PublicProfileFieldsSerializer(serializers.ModelSerializer):
     class Meta:
         model = Profile
         fields = (
+            "headline",
             "bio",
             "github_url",
             "linkedin_url",
@@ -566,6 +568,7 @@ class PublicProfileDetailSerializer(serializers.ModelSerializer):
 
 
 class PublicProfileSummarySerializer(serializers.ModelSerializer):
+    headline = serializers.CharField(source="profile.headline")
     university = serializers.CharField(source="profile.university")
     major = serializers.CharField(source="profile.major.name", allow_null=True)
     start_year = serializers.IntegerField(source="profile.start_year", allow_null=True)
@@ -586,6 +589,7 @@ class PublicProfileSummarySerializer(serializers.ModelSerializer):
             "id",
             "first_name",
             "last_name",
+            "headline",
             "university",
             "major",
             "start_year",

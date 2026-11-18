@@ -191,12 +191,14 @@ class StageThreeProfileAPITests(TestCase):
         response = self.client.get("/api/profile/")
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertNotIn("study_year", response.data)
+        self.assertEqual(response.data["headline"], "")
         self.assertIsNone(response.data["start_year"])
         self.assertFalse(response.data["is_currently_studying"])
 
         response = self.client.patch(
             "/api/profile/",
             {
+                "headline": "Building useful tools for research teams.",
                 "bio": "Researching academic opportunities.",
                 "github_url": "https://github.com/example",
                 "linkedin_url": "https://www.linkedin.com/in/example",
@@ -210,6 +212,14 @@ class StageThreeProfileAPITests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.user.profile.refresh_from_db()
+        self.assertEqual(
+            response.data["headline"],
+            "Building useful tools for research teams.",
+        )
+        self.assertEqual(
+            self.user.profile.headline,
+            "Building useful tools for research teams.",
+        )
         self.assertEqual(self.user.profile.bio, "Researching academic opportunities.")
         self.assertEqual(self.user.profile.github_url, "https://github.com/example")
         self.assertEqual(
