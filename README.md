@@ -70,13 +70,20 @@ The API is available at <http://127.0.0.1:8000/>. The public health check is
 ## Authentication and account endpoints
 
 Protected API endpoints use JWT authentication by default and require an access
-token, except registration, login, refresh, and password reset. Health and API
-documentation routes remain public. Send protected requests with
+token, except registration, login, email verification, verification resend,
+refresh, and password reset. Health and API documentation routes remain public.
+Send protected requests with
 `Authorization: Bearer <access-token>`.
 
-- `POST /api/auth/register/` — create an account and return account details and
-  an access/refresh token pair.
+- `POST /api/auth/register/` — create an inactive account and send an email
+  verification link; the response contains a `detail` message and no tokens.
 - `POST /api/auth/login/` — authenticate with email and password.
+- `POST /api/auth/verify-email/` — verify an account using
+  `{"token": "<signed-verification-token>"}`.
+- `POST /api/auth/resend-verification/` — request another verification link
+  using `{"email": "student@example.com"}`. Responses do not disclose whether
+  the address belongs to an unverified account; requests are throttled to
+  five per hour per IP and each account has a five-minute cooldown.
 - `POST /api/auth/token/refresh/` — obtain a new access token; refresh tokens
   rotate and the previous refresh token is blacklisted.
 - `POST /api/auth/logout/` — blacklist the authenticated user's refresh token.
@@ -131,17 +138,21 @@ Access tokens last 30 minutes and refresh tokens last 7 days. Blacklisting a
 refresh token does **not** immediately invalidate an already-issued access
 token; access tokens remain usable until they expire.
 
-Password-reset email is sent through Gmail SMTP. The reset link uses
+Password-reset and email-verification messages use the same Persian, right-to-left
+TeamUp email layout and are sent through Gmail SMTP. The reset link uses
 `FRONTEND_URL` and points to `/reset-password/confirm/` with `uid` and `token`
-query parameters. Set the SMTP variables shown in `.env.example`; provide
+query parameters. Registration and resend links point to
+`/verify-email/?token=...` on the frontend; that frontend page must submit the
+token to `POST /api/auth/verify-email/`. Verification links expire after 24
+hours. Set the SMTP variables shown in `.env.example`; provide
 `EMAIL_HOST_PASSWORD` as a Gmail App Password through your environment or
 hosting dashboard, never in source control. For local development,
 `.env.example` uses the Vite origin `http://localhost:5173`. In production,
 `FRONTEND_URL` is optional until the frontend is deployed. If it is missing or
 isn't a valid non-local HTTPS URL, the backend still starts, but password-reset
-requests return the usual generic response without sending an email or
-generating a link. Set `FRONTEND_URL` to the actual deployed HTTPS frontend
-origin when it is available.
+and verification requests return their usual generic responses without sending
+email or generating links. Set `FRONTEND_URL` to the actual deployed HTTPS
+frontend origin when it is available.
 
 Visit <http://127.0.0.1:8000/admin/> to manage records.
 

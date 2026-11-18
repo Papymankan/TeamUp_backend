@@ -1,0 +1,14 @@
+سلام {{ recipient_name }}،
+
+{{ introduction }}
+
+برای ادامه، این پیوند را باز کنید:
+{{ action_url }}
+
+{{ expiration_message }}
+{% if note %}
+{{ note }}
+{% endif %}
+
+با احترام،
+تیم TeamUp

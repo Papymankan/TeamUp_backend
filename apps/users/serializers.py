@@ -121,7 +121,11 @@ class RegistrationSerializer(StrictInputMixin, serializers.ModelSerializer):
         password = validated_data.pop("password")
         try:
             with transaction.atomic():
-                return User.objects.create_user(password=password, **validated_data)
+                return User.objects.create_user(
+                    password=password,
+                    is_active=False,
+                    **validated_data,
+                )
         except IntegrityError as error:
             if User.objects.filter(email__iexact=validated_data["email"]).exists():
                 raise serializers.ValidationError(
@@ -169,6 +173,17 @@ class LogoutSerializer(StrictInputMixin, serializers.Serializer):
 
 
 class PasswordResetRequestSerializer(StrictInputMixin, serializers.Serializer):
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        return normalize_email(value)
+
+
+class EmailVerificationTokenSerializer(StrictInputMixin, serializers.Serializer):
+    token = serializers.CharField(trim_whitespace=False)
+
+
+class EmailVerificationResendSerializer(StrictInputMixin, serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):

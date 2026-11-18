@@ -1,25 +1,24 @@
 import logging
-from email.mime.image import MIMEImage
-from pathlib import Path
-from smtplib import SMTPException
 from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
-from django.core.mail import EmailMultiAlternatives
+from django.core import signing
+from django.core.cache import cache
 from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils.encoding import force_bytes
-from django.utils.html import format_html
 from django.utils.http import urlsafe_base64_encode
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, OpenApiResponse, extend_schema
 from rest_framework import generics, serializers, status
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.throttling import ScopedRateThrottle
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from .email_utils import password_reset_expiration_message, send_auth_email
 from .models import (
     Interest,
     Major,
@@ -32,6 +31,8 @@ from .models import (
 from .pagination import PublicProfilePagination
 from .serializers import (
     AccountSerializer,
+    EmailVerificationResendSerializer,
+    EmailVerificationTokenSerializer,
     InterestSerializer,
     LoginSerializer,
     LogoutSerializer,
@@ -53,6 +54,9 @@ from .serializers import (
 
 User = get_user_model()
 logger = logging.getLogger(__name__)
+EMAIL_VERIFICATION_SALT = "users.email_verification"
+EMAIL_VERIFICATION_MAX_AGE = 24 * 60 * 60
+EMAIL_VERIFICATION_RESEND_COOLDOWN = 5 * 60
 
 
 class AuthenticationResponseSerializer(serializers.Serializer):
@@ -66,6 +70,10 @@ class DetailResponseSerializer(serializers.Serializer):
 
 
 def token_response(user):
+    if not user.is_active:
+        raise serializers.ValidationError(
+            "برای ورود ابتدا نشانی ایمیل خود را تأیید کنید."
+        )
     refresh = RefreshToken.for_user(user)
     return {
         "user": AccountSerializer(user).data,
@@ -80,14 +88,24 @@ class RegistrationView(APIView):
 
     @extend_schema(
         request=RegistrationSerializer,
-        responses={201: AuthenticationResponseSerializer},
+        responses={201: DetailResponseSerializer},
     )
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        send_verification_email(user)
         logger.info("User registration completed user_id=%s", user.pk)
-        return Response(token_response(user), status=status.HTTP_201_CREATED)
+        return Response(
+            {
+                "detail": (
+                    "ثبت‌نام انجام شد. برای ورود، نشانی ایمیل خود را از طریق "
+                    "پیوند ارسالی تأیید کنید. اگر ایمیل را دریافت نکردید، "
+                    "می‌توانید درخواست ارسال مجدد دهید."
+                )
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 class LoginView(APIView):
@@ -97,6 +115,10 @@ class LoginView(APIView):
     @extend_schema(
         request=LoginSerializer,
         responses={200: AuthenticationResponseSerializer},
+        description=(
+            "Only active (email-verified) accounts can receive access and "
+            "refresh tokens."
+        ),
     )
     def post(self, request):
         serializer = LoginSerializer(data=request.data, context={"request": request})
@@ -104,6 +126,143 @@ class LoginView(APIView):
         user = serializer.validated_data["user"]
         logger.info("User login succeeded user_id=%s", user.pk)
         return Response(token_response(user))
+
+
+def send_verification_email(user):
+    if not settings.FRONTEND_URL:
+        logger.warning(
+            "Verification email not sent because FRONTEND_URL is unavailable "
+            "or invalid."
+        )
+        return False
+
+    token = signing.dumps(
+        {"user_id": user.pk, "email": user.email},
+        salt=EMAIL_VERIFICATION_SALT,
+        compress=True,
+    )
+    verification_url = (
+        f"{settings.FRONTEND_URL.rstrip('/')}/verify-email/"
+        f"?{urlencode({'token': token})}"
+    )
+    return send_auth_email(
+        user=user,
+        subject="تأیید نشانی ایمیل در TeamUp",
+        purpose="Email verification",
+        template_context={
+            "heading": "تأیید نشانی ایمیل",
+            "introduction": (
+                "ثبت‌نام شما در TeamUp با موفقیت انجام شد. برای فعال‌کردن "
+                "حساب و استفاده از برنامه، نشانی ایمیل خود را با انتخاب "
+                "دکمه زیر تأیید کنید."
+            ),
+            "button_label": "تأیید ایمیل",
+            "action_url": verification_url,
+            "expiration_message": (
+                "این پیوند تا ۲۴ ساعت پس از ارسال معتبر است."
+            ),
+            "note": (
+                "اگر شما در TeamUp ثبت‌نام نکرده‌اید، می‌توانید این ایمیل "
+                "را نادیده بگیرید."
+            ),
+        },
+    )
+
+
+class EmailVerificationView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+
+    @extend_schema(
+        request=EmailVerificationTokenSerializer,
+        responses={
+            200: DetailResponseSerializer,
+            400: OpenApiResponse(description="Verification token is invalid or expired."),
+        },
+    )
+    def post(self, request):
+        serializer = EmailVerificationTokenSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            payload = signing.loads(
+                serializer.validated_data["token"],
+                salt=EMAIL_VERIFICATION_SALT,
+                max_age=EMAIL_VERIFICATION_MAX_AGE,
+            )
+            user = User.objects.get(
+                pk=payload["user_id"],
+                email=payload["email"],
+            )
+        except (
+            signing.BadSignature,
+            KeyError,
+            TypeError,
+            ValueError,
+            User.DoesNotExist,
+        ) as error:
+            raise serializers.ValidationError(
+                {"token": "پیوند تأیید ایمیل نامعتبر یا منقضی شده است."}
+            ) from error
+
+        if user.is_active:
+            return Response(
+                {"detail": "نشانی ایمیل این حساب قبلاً تأیید شده است."}
+            )
+
+        user.is_active = True
+        user.save(update_fields=("is_active",))
+        logger.info("User email verified user_id=%s", user.pk)
+        return Response(
+            {"detail": "نشانی ایمیل با موفقیت تأیید شد. اکنون می‌توانید وارد شوید."}
+        )
+
+
+class EmailVerificationResendView(APIView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = "email_verification_resend"
+
+    @extend_schema(
+        request=EmailVerificationResendSerializer,
+        responses={
+            200: DetailResponseSerializer,
+            429: OpenApiResponse(description="Resend rate limit exceeded."),
+        },
+    )
+    def post(self, request):
+        serializer = EmailVerificationResendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        email = serializer.validated_data["email"]
+        response_data = {
+            "detail": (
+                "اگر حسابی با این نشانی نیازمند تأیید باشد، پیوند تازه‌ای "
+                "برای شما ارسال خواهد شد."
+            )
+        }
+
+        user = User.objects.filter(email__iexact=email, is_active=False).first()
+        if user is None:
+            return Response(response_data)
+        if not settings.FRONTEND_URL:
+            logger.warning(
+                "Verification email not sent because FRONTEND_URL is unavailable "
+                "or invalid."
+            )
+            return Response(response_data)
+
+        cooldown_key = f"teamup_email_verification_resend:{user.pk}"
+        if not cache.add(
+            cooldown_key,
+            "1",
+            timeout=EMAIL_VERIFICATION_RESEND_COOLDOWN,
+        ):
+            return Response(response_data)
+
+        if not send_verification_email(user):
+            cache.delete(cooldown_key)
+        return Response(response_data)
 
 
 class LogoutView(APIView):
@@ -160,78 +319,27 @@ class PasswordResetRequestView(APIView):
                 f"{settings.FRONTEND_URL.rstrip('/')}/reset-password/confirm/"
                 f"?{urlencode({'uid': uid, 'token': token})}"
             )
-            try:
-                message = EmailMultiAlternatives(
-                    subject="بازنشانی گذرواژه TeamUp",
-                    body=(
-                        "درخواست بازنشانی گذرواژه حساب TeamUp شما دریافت شد.\n\n"
-                        "برای انتخاب گذرواژه جدید، روی دکمه «بازنشانی گذرواژه» "
-                        "در نسخه HTML این ایمیل کلیک کنید. اگر دکمه کار نکرد، "
-                        f"پیوند زیر را در مرورگر کپی کنید:\n{reset_url}\n\n"
-                        "اگر شما این درخواست را ثبت نکرده‌اید، این ایمیل را "
-                        "نادیده بگیرید."
+            send_auth_email(
+                user=user,
+                subject="بازنشانی گذرواژه TeamUp",
+                purpose="Password reset",
+                template_context={
+                    "heading": "تغییر رمز عبور",
+                    "introduction": (
+                        "درخواست تغییر رمز عبور حساب TeamUp شما دریافت شد. "
+                        "برای انتخاب رمز عبور جدید، دکمه زیر را انتخاب کنید."
                     ),
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    to=[user.email],
-                )
-                logo = MIMEImage(
-                    (
-                        Path(__file__).resolve().parent
-                        / "static"
-                        / "users"
-                        / "email"
-                        / "teamup-logo.png"
-                    ).read_bytes(),
-                    _subtype="png",
-                )
-                logo.add_header("Content-ID", "<teamup-logo>")
-                logo.add_header(
-                    "Content-Disposition",
-                    "inline",
-                    filename="teamup-logo.png",
-                )
-                message.attach(logo)
-                message.attach_alternative(
-                    format_html(
-                        '<div lang="fa" dir="rtl" style="margin:0;padding:36px 16px;'
-                        'background-color:#f8fafc;direction:rtl;text-align:right;'
-                        'font-family:Arial,Helvetica,sans-serif;color:#1e293b;">'
-                        '<table role="presentation" cellpadding="0" cellspacing="0" '
-                        'style="width:100%;max-width:520px;margin:0 auto;background:#ffffff;'
-                        'border:1px solid #e2e8f0;border-radius:16px;">'
-                        '<tr><td style="padding:36px;">'
-                        '<img src="cid:teamup-logo" alt="لوگوی TeamUp" width="64" '
-                        'height="64" style="display:block;width:64px;height:64px;'
-                        'margin:0 0 24px;">'
-                        '<h1 style="margin:0 0 16px;font-size:24px;line-height:1.3;'
-                        'color:#0f172a;">بازنشانی گذرواژه</h1>'
-                        '<p style="margin:0 0 28px;font-size:16px;line-height:1.6;'
-                        'color:#475569;">درخواست بازنشانی گذرواژه حساب TeamUp شما '
-                        'دریافت شد. برای انتخاب گذرواژه جدید، روی دکمه زیر کلیک کنید.</p>'
-                        '<table role="presentation" cellpadding="0" cellspacing="0">'
-                        '<tr><td bgcolor="#4f46e5" style="border-radius:8px;">'
-                        '<a href="{}" style="display:inline-block;padding:13px 22px;'
-                        'color:#ffffff;text-decoration:none;font-size:16px;'
-                        'font-weight:bold;border-radius:8px;">بازنشانی گذرواژه</a>'
-                        '</td></tr></table>'
-                        '<p style="margin:28px 0 0;font-size:14px;line-height:1.6;'
-                        'color:#64748b;">اگر شما این درخواست را ثبت نکرده‌اید، '
-                        'می‌توانید این ایمیل را نادیده بگیرید.</p>'
-                        '</td></tr></table></div>',
-                        reset_url,
+                    "button_label": "تغییر رمز عبور",
+                    "action_url": reset_url,
+                    "expiration_message": password_reset_expiration_message(
+                        settings.PASSWORD_RESET_TIMEOUT
                     ),
-                    "text/html",
-                )
-                message.send(fail_silently=False)
-                logger.info("Password reset email sent user_id=%s", user.pk)
-            except (SMTPException, OSError) as error:
-                logger.error(
-                    "Password reset email delivery failed for user_id=%s "
-                    "(error_type=%s).",
-                    user.pk,
-                    type(error).__name__,
-                    exc_info=(type(error), None, error.__traceback__),
-                )
+                    "note": (
+                        "اگر شما این درخواست را ثبت نکرده‌اید، می‌توانید این "
+                        "ایمیل را نادیده بگیرید."
+                    ),
+                },
+            )
 
         return Response(response_data)
 

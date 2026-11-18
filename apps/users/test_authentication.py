@@ -1,9 +1,12 @@
 from datetime import timedelta
 from smtplib import SMTPException
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core import signing
+from django.core.cache import cache
 from django.core import mail
 from django.test import TestCase, override_settings
 from django.utils.encoding import force_bytes
@@ -23,12 +26,21 @@ REFRESH_URL = "/api/auth/token/refresh/"
 LOGOUT_URL = "/api/auth/logout/"
 RESET_URL = "/api/auth/password-reset/"
 RESET_CONFIRM_URL = "/api/auth/password-reset/confirm/"
+VERIFY_EMAIL_URL = "/api/auth/verify-email/"
+RESEND_VERIFICATION_URL = "/api/auth/resend-verification/"
 ACCOUNT_URL = "/api/account/"
 VALID_PASSWORD = "StrongPassword123!"
+EMAIL_VERIFICATION_SALT = "users.email_verification"
 
 
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    FRONTEND_URL="http://localhost:5173",
+)
 class RegistrationTests(TestCase):
     def setUp(self):
+        cache.clear()
+        mail.outbox.clear()
         self.client = APIClient()
         self.payload = {
             "email": " Student@Example.com ",
@@ -37,23 +49,32 @@ class RegistrationTests(TestCase):
             "last_name": "Ahmadi",
         }
 
-    def test_registration_creates_hashed_user_profile_and_tokens(self):
+    def test_registration_creates_inactive_user_and_sends_verification_email(self):
         response = self.client.post(REGISTER_URL, self.payload, format="json")
 
         self.assertEqual(response.status_code, 201)
         user = User.objects.get(email="student@example.com")
+        self.assertFalse(user.is_active)
         self.assertTrue(user.check_password(VALID_PASSWORD))
         self.assertNotEqual(user.password, VALID_PASSWORD)
         self.assertEqual(Profile.objects.filter(user=user).count(), 1)
         self.assertEqual(
-            set(response.data),
-            {"user", "access", "refresh"},
+            response.data,
+            {
+                "detail": (
+                    "ثبت‌نام انجام شد. برای ورود، نشانی ایمیل خود را از طریق "
+                    "پیوند ارسالی تأیید کنید. اگر ایمیل را دریافت نکردید، "
+                    "می‌توانید درخواست ارسال مجدد دهید."
+                )
+            },
         )
-        self.assertEqual(
-            set(response.data["user"]),
-            {"id", "email", "first_name", "last_name", "date_joined"},
-        )
-        self.assertNotIn("password", response.data["user"])
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [user.email])
+        html_body, _ = mail.outbox[0].alternatives[0]
+        self.assertIn(">تأیید ایمیل</a>", html_body)
+        self.assertIn("۲۴ ساعت", mail.outbox[0].body)
 
     def test_duplicate_email_is_rejected_case_insensitively(self):
         User.objects.create_user(email="student@example.com", password=VALID_PASSWORD)
@@ -105,6 +126,32 @@ class RegistrationTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("first_name", response.data)
+
+    def test_email_delivery_failure_keeps_account_inactive_and_can_be_retried(self):
+        with patch(
+            "apps.users.email_utils.EmailMultiAlternatives.send",
+            side_effect=SMTPException("private smtp error"),
+        ):
+            with self.assertLogs("apps.users.email_utils", level="ERROR"):
+                response = self.client.post(
+                    REGISTER_URL,
+                    self.payload,
+                    format="json",
+                )
+
+        self.assertEqual(response.status_code, 201)
+        user = User.objects.get(email="student@example.com")
+        self.assertFalse(user.is_active)
+
+        retry_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": user.email},
+            format="json",
+        )
+
+        self.assertEqual(retry_response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertFalse(User.objects.get(pk=user.pk).is_active)
 
 
 class LoginTests(TestCase):
@@ -161,6 +208,203 @@ class LoginTests(TestCase):
             response.data["non_field_errors"],
             ["ایمیل یا رمز عبور نادرست است."],
         )
+        self.assertNotIn("access", response.data)
+        self.assertNotIn("refresh", response.data)
+
+
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    FRONTEND_URL="http://localhost:5173",
+)
+class EmailVerificationTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        mail.outbox.clear()
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email="verify@example.com",
+            password=VALID_PASSWORD,
+            first_name="Sara",
+            is_active=False,
+        )
+
+    def _token(self, user=None):
+        user = user or self.user
+        return signing.dumps(
+            {"user_id": user.pk, "email": user.email},
+            salt=EMAIL_VERIFICATION_SALT,
+            compress=True,
+        )
+
+    def test_valid_token_activates_account_and_cannot_activate_another(self):
+        other_user = User.objects.create_user(
+            email="other-verify@example.com",
+            password=VALID_PASSWORD,
+            is_active=False,
+        )
+
+        response = self.client.post(
+            VERIFY_EMAIL_URL,
+            {"token": self._token()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        other_user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+        self.assertFalse(other_user.is_active)
+
+    @patch("apps.users.views.EMAIL_VERIFICATION_MAX_AGE", -1)
+    def test_expired_token_is_rejected(self):
+        response = self.client.post(
+            VERIFY_EMAIL_URL,
+            {"token": self._token()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("token", response.data)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_invalid_and_malformed_tokens_are_rejected(self):
+        for token in ("not-a-signed-token", "%%%"):
+            with self.subTest(token=token):
+                response = self.client.post(
+                    VERIFY_EMAIL_URL,
+                    {"token": token},
+                    format="json",
+                )
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("token", response.data)
+        self.user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+
+    def test_token_bound_to_another_email_is_rejected(self):
+        other_user = User.objects.create_user(
+            email="different@example.com",
+            password=VALID_PASSWORD,
+            is_active=False,
+        )
+        mismatched_token = signing.dumps(
+            {"user_id": other_user.pk, "email": self.user.email},
+            salt=EMAIL_VERIFICATION_SALT,
+            compress=True,
+        )
+
+        response = self.client.post(
+            VERIFY_EMAIL_URL,
+            {"token": mismatched_token},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        other_user.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertFalse(other_user.is_active)
+
+    def test_already_verified_account_gets_specific_response(self):
+        self.user.is_active = True
+        self.user.save(update_fields=("is_active",))
+
+        response = self.client.post(
+            VERIFY_EMAIL_URL,
+            {"token": self._token()},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.data["detail"],
+            "نشانی ایمیل این حساب قبلاً تأیید شده است.",
+        )
+
+    def test_resend_sends_email_only_for_unverified_account(self):
+        response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        html_body, _ = mail.outbox[0].alternatives[0]
+        self.assertIn(">تأیید ایمیل</a>", html_body)
+
+        self.user.is_active = True
+        self.user.save(update_fields=("is_active",))
+        verified_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+        self.assertEqual(verified_response.data, response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_resend_cooldown_and_unknown_email_response(self):
+        first_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+        unknown_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": "unknown@example.com"},
+            format="json",
+        )
+        repeated_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+
+        self.assertEqual(first_response.status_code, 200)
+        self.assertEqual(unknown_response.data, first_response.data)
+        self.assertEqual(repeated_response.data, first_response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_resend_ip_rate_limit_is_enforced(self):
+        for _ in range(5):
+            response = self.client.post(
+                RESEND_VERIFICATION_URL,
+                {"email": "unknown@example.com"},
+                format="json",
+            )
+            self.assertEqual(response.status_code, 200)
+
+        limited_response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": "unknown@example.com"},
+            format="json",
+        )
+        self.assertEqual(limited_response.status_code, 429)
+
+    def test_verification_email_uses_shared_persian_branding_and_frontend_link(self):
+        response = self.client.post(
+            RESEND_VERIFICATION_URL,
+            {"email": self.user.email},
+            format="json",
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        email = mail.outbox[0]
+        self.assertIn("سلام Sara،", email.body)
+        self.assertIn("۲۴ ساعت", email.body)
+        link = next(line.strip() for line in email.body.splitlines() if line.startswith("http"))
+        parsed_link = urlsplit(link)
+        self.assertEqual(parsed_link.scheme, "http")
+        self.assertEqual(parsed_link.netloc, "localhost:5173")
+        self.assertEqual(parsed_link.path, "/verify-email/")
+        self.assertTrue(parse_qs(parsed_link.query).get("token"))
+
+        html_body, content_type = email.alternatives[0]
+        self.assertEqual(content_type, "text/html")
+        self.assertIn('lang="fa" dir="rtl"', html_body)
+        self.assertIn('src="cid:teamup-logo"', html_body)
+        self.assertIn(">تأیید ایمیل</a>", html_body)
+        self.assertIn("max-width:520px", html_body)
+        self.assertEqual(email.attachments[0].get_content_type(), "image/png")
 
 
 class TokenTests(TestCase):
@@ -282,7 +526,7 @@ class PasswordResetTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, [self.user.email])
         self.assertIn("reset-password/confirm/", mail.outbox[0].body)
-        self.assertIn("پیوند زیر را در مرورگر کپی کنید", mail.outbox[0].body)
+        self.assertIn("برای ادامه، این پیوند را باز کنید", mail.outbox[0].body)
         logo = mail.outbox[0].attachments[0]
         self.assertEqual(logo.get_content_type(), "image/png")
         self.assertEqual(logo["Content-ID"], "<teamup-logo>")
@@ -290,12 +534,14 @@ class PasswordResetTests(TestCase):
         html_body, content_type = mail.outbox[0].alternatives[0]
         self.assertEqual(content_type, "text/html")
         self.assertIn('src="cid:teamup-logo"', html_body)
-        self.assertIn(">بازنشانی گذرواژه</a>", html_body)
+        self.assertIn(">تغییر رمز عبور</a>", html_body)
+        self.assertIn("۳ روز", html_body)
+        self.assertIn("اگر دکمه کار نمی‌کند", html_body)
         self.assertIn(
             'href="http://localhost:5173/reset-password/confirm/',
             html_body,
         )
-        self.assertNotIn(
+        self.assertIn(
             ">http://localhost:5173/reset-password/confirm/",
             html_body,
         )
@@ -361,7 +607,7 @@ class PasswordResetTests(TestCase):
 
     @override_settings(FRONTEND_URL=None)
     def test_missing_frontend_url_returns_generic_response_without_sending_email(self):
-        with patch("apps.users.views.EmailMultiAlternatives") as email_message:
+        with patch("apps.users.email_utils.EmailMultiAlternatives") as email_message:
             with self.assertLogs("apps.users.views", level="WARNING") as captured:
                 responses = [
                     self.client.post(
@@ -384,10 +630,10 @@ class PasswordResetTests(TestCase):
     def test_delivery_failure_is_logged_without_exposing_email_contents(self):
         private_error_detail = "private-smtp-error-detail"
         with patch(
-            "apps.users.views.EmailMultiAlternatives.send",
+            "apps.users.email_utils.EmailMultiAlternatives.send",
             side_effect=SMTPException(private_error_detail),
         ):
-            with self.assertLogs("apps.users.views", level="ERROR") as captured:
+            with self.assertLogs("apps.users.email_utils", level="ERROR") as captured:
                 response = self.client.post(
                     RESET_URL,
                     {"email": self.user.email},
@@ -581,6 +827,8 @@ class AuthDocumentationTests(TestCase):
         for path in (
             "/api/auth/register/",
             "/api/auth/login/",
+            "/api/auth/verify-email/",
+            "/api/auth/resend-verification/",
             "/api/auth/token/refresh/",
             "/api/auth/logout/",
             "/api/auth/password-reset/",
