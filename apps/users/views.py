@@ -523,7 +523,7 @@ PUBLIC_PROFILE_SEARCH_PARAMETERS = [
 
 class PublicProfileListView(generics.ListAPIView):
     serializer_class = PublicProfileSummarySerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     pagination_class = PublicProfilePagination
 
     @extend_schema(
@@ -538,11 +538,15 @@ class PublicProfileListView(generics.ListAPIView):
         filters.is_valid(raise_exception=True)
         values = filters.validated_data
 
-        queryset = (
-            User.objects.filter(is_active=True, profile__isnull=False)
-            .exclude(pk=self.request.user.pk)
-            .select_related("profile")
-            .prefetch_related("user_skills__skill", "user_interests__interest")
+        queryset = User.objects.filter(
+            is_active=True,
+            profile__isnull=False,
+        )
+        if self.request.user is not None and self.request.user.is_authenticated:
+            queryset = queryset.exclude(pk=self.request.user.pk)
+        queryset = queryset.select_related("profile").prefetch_related(
+            "user_skills__skill",
+            "user_interests__interest",
         )
 
         search = values.get("search", "").strip()

@@ -147,14 +147,14 @@ class PublicProfileAPITests(TestCase):
         self.assertIsNone(response.data["profile"])
         self.assertEqual(response.data["portfolio"], [])
 
-    def test_public_endpoints_require_authentication(self):
+    def test_detail_requires_authentication_but_list_is_public(self):
         anonymous_client = APIClient()
 
         detail_response = anonymous_client.get(f"/api/users/{self.target.pk}/")
         list_response = anonymous_client.get("/api/users/")
 
         self.assertEqual(detail_response.status_code, 401)
-        self.assertEqual(list_response.status_code, 401)
+        self.assertEqual(list_response.status_code, 200)
 
 
 class PublicProfileSearchTests(TestCase):
@@ -257,6 +257,19 @@ class PublicProfileSearchTests(TestCase):
             with self.subTest(term=term):
                 response = self.client.get("/api/users/", {"search": term})
                 self.assertEqual(self._ids(response), {self.alice.pk})
+
+    def test_anonymous_users_can_search_and_filter_public_profiles(self):
+        anonymous_client = APIClient()
+
+        search_response = anonymous_client.get("/api/users/", {"search": "Alice"})
+        self.assertEqual(self._ids(search_response), {self.alice.pk})
+        self.assertNotIn("email", search_response.data["results"][0])
+
+        filter_response = anonymous_client.get(
+            "/api/users/",
+            {"university": "KNTU", "skill": "React"},
+        )
+        self.assertEqual(self._ids(filter_response), {self.alice.pk})
 
     def test_individual_filters_match_case_insensitively(self):
         cases = (
