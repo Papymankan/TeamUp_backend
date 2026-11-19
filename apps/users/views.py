@@ -583,7 +583,7 @@ class PublicProfileListView(generics.ListAPIView):
 
 class PublicProfileDetailView(generics.RetrieveAPIView):
     serializer_class = PublicProfileDetailSerializer
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
     queryset = (
         User.objects.filter(is_active=True)
         .select_related("profile")

@@ -147,13 +147,16 @@ class PublicProfileAPITests(TestCase):
         self.assertIsNone(response.data["profile"])
         self.assertEqual(response.data["portfolio"], [])
 
-    def test_detail_requires_authentication_but_list_is_public(self):
+    def test_anonymous_users_can_view_public_profiles(self):
         anonymous_client = APIClient()
 
         detail_response = anonymous_client.get(f"/api/users/{self.target.pk}/")
         list_response = anonymous_client.get("/api/users/")
 
-        self.assertEqual(detail_response.status_code, 401)
+        self.assertEqual(detail_response.status_code, 200)
+        self.assertEqual(detail_response.data["id"], self.target.pk)
+        self.assertNotIn("email", detail_response.data)
+        self.assertNotIn("password", detail_response.data)
         self.assertEqual(list_response.status_code, 200)
 
 
