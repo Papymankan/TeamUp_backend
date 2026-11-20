@@ -69,6 +69,12 @@ class DetailResponseSerializer(serializers.Serializer):
     detail = serializers.CharField()
 
 
+class VerificationRequiredResponseSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    detail = serializers.CharField()
+    email = serializers.EmailField()
+
+
 def token_response(user):
     if not user.is_active:
         raise serializers.ValidationError(
@@ -88,12 +94,31 @@ class RegistrationView(APIView):
 
     @extend_schema(
         request=RegistrationSerializer,
-        responses={201: DetailResponseSerializer},
+        responses={
+            201: DetailResponseSerializer,
+            409: VerificationRequiredResponseSerializer,
+        },
     )
     def post(self, request):
         serializer = RegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = serializer.save()
+        email = serializer.validated_data["email"]
+        existing_user = User.objects.filter(email__iexact=email).first()
+        if existing_user is not None:
+            if not existing_user.is_active:
+                return self.verification_required_response(email)
+            raise serializers.ValidationError(
+                {"email": "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."}
+            )
+
+        try:
+            user = serializer.save()
+        except serializers.ValidationError:
+            existing_user = User.objects.filter(email__iexact=email).first()
+            if existing_user is not None and not existing_user.is_active:
+                return self.verification_required_response(email)
+            raise
+
         send_verification_email(user)
         logger.info("User registration completed user_id=%s", user.pk)
         return Response(
@@ -105,6 +130,20 @@ class RegistrationView(APIView):
                 )
             },
             status=status.HTTP_201_CREATED,
+        )
+
+    @staticmethod
+    def verification_required_response(email):
+        return Response(
+            {
+                "code": "email_verification_required",
+                "detail": (
+                    "برای این ایمیل یک حساب تأییدنشده وجود دارد. "
+                    "برای دریافت دوباره پیوند، درخواست ارسال مجدد کنید."
+                ),
+                "email": email,
+            },
+            status=status.HTTP_409_CONFLICT,
         )
 
 

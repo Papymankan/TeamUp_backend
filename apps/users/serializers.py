@@ -99,7 +99,7 @@ class RegistrationSerializer(StrictInputMixin, serializers.ModelSerializer):
 
     def validate_email(self, value):
         email = normalize_email(value)
-        if User.objects.filter(email__iexact=email).exists():
+        if User.objects.filter(email__iexact=email, is_active=True).exists():
             raise serializers.ValidationError(
                 "کاربری با این ایمیل قبلاً ثبت‌نام کرده است."
             )

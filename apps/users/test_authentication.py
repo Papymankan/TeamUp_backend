@@ -84,6 +84,33 @@ class RegistrationTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("email", response.data)
 
+    def test_duplicate_unverified_email_requests_verification_resend(self):
+        existing_user = User.objects.create_user(
+            email="student@example.com",
+            password=VALID_PASSWORD,
+            is_active=False,
+        )
+
+        response = self.client.post(REGISTER_URL, self.payload, format="json")
+
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(
+            response.data,
+            {
+                "code": "email_verification_required",
+                "detail": (
+                    "برای این ایمیل یک حساب تأییدنشده وجود دارد. "
+                    "برای دریافت دوباره پیوند، درخواست ارسال مجدد کنید."
+                ),
+                "email": "student@example.com",
+            },
+        )
+        self.assertEqual(User.objects.filter(email="student@example.com").count(), 1)
+        existing_user.refresh_from_db()
+        self.assertTrue(existing_user.check_password(VALID_PASSWORD))
+        self.assertFalse(existing_user.is_active)
+        self.assertEqual(len(mail.outbox), 0)
+
     def test_invalid_email_is_rejected(self):
         self.payload["email"] = "not-an-email"
 
