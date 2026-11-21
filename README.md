@@ -119,7 +119,8 @@ Send protected requests with
 Profile education data uses `start_year`, optional `graduation_year`, and
 `is_currently_studying`. The old `study_year` values remain stored but are no
 longer exposed or used. Profile discovery supports combining `search`,
-`university`, `major`, `start_year`, `skill`, and `interest` query parameters. Results are paginated
+`university`, `major`, `start_year` (or its `year` alias), `skill`, and
+`interest` query parameters. Results are paginated
 with a default page size of 10; `page_size` may be set up to 50. Search results
 contain a brief profile summary, while the individual public-profile endpoint
 includes the profile, skills with proficiency, interests, and portfolio.

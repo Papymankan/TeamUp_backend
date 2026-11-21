@@ -553,6 +553,7 @@ PUBLIC_PROFILE_SEARCH_PARAMETERS = [
     OpenApiParameter("university", str, OpenApiParameter.QUERY, description="Case-insensitive partial university match."),
     OpenApiParameter("major", str, OpenApiParameter.QUERY, description="Case-insensitive partial major match."),
     OpenApiParameter("start_year", int, OpenApiParameter.QUERY, description="Filter by calendar start year."),
+    OpenApiParameter("year", int, OpenApiParameter.QUERY, description="Alias for start_year."),
     OpenApiParameter("skill", str, OpenApiParameter.QUERY, description="Case-insensitive partial skill-name match."),
     OpenApiParameter("interest", str, OpenApiParameter.QUERY, description="Case-insensitive partial interest-name match."),
     OpenApiParameter("page", int, OpenApiParameter.QUERY, description="Page number."),
@@ -606,8 +607,9 @@ class PublicProfileListView(generics.ListAPIView):
         if major:
             queryset = queryset.filter(profile__major__name__icontains=major)
 
-        if "start_year" in values:
-            queryset = queryset.filter(profile__start_year=values["start_year"])
+        start_year = values.get("start_year", values.get("year"))
+        if start_year is not None:
+            queryset = queryset.filter(profile__start_year=start_year)
 
         skill = values.get("skill", "").strip()
         if skill:

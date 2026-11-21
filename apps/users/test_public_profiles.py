@@ -279,6 +279,7 @@ class PublicProfileSearchTests(TestCase):
             ({"university": "kNtU"}, self.alice.pk),
             ({"major": "computer"}, self.alice.pk),
             ({"start_year": "2019"}, self.alice.pk),
+            ({"year": "2019"}, self.alice.pk),
             ({"skill": "reaCt"}, self.alice.pk),
             ({"interest": "gIs"}, self.alice.pk),
         )
@@ -303,10 +304,11 @@ class PublicProfileSearchTests(TestCase):
         self.assertEqual(response.data["count"], 1)
 
     def test_invalid_start_year_is_rejected(self):
-        for value in ("invalid", "0", "-1", "2.5"):
-            with self.subTest(value=value):
-                response = self.client.get("/api/users/", {"start_year": value})
-                self.assertEqual(response.status_code, 400)
+        for field in ("start_year", "year"):
+            for value in ("invalid", "0", "-1", "2.5"):
+                with self.subTest(field=field, value=value):
+                    response = self.client.get("/api/users/", {field: value})
+                    self.assertEqual(response.status_code, 400)
 
     def test_pagination_defaults_to_ten_and_caps_page_size_at_fifty(self):
         for index in range(51):
@@ -345,6 +347,7 @@ class PublicProfileSearchTests(TestCase):
                 "university",
                 "major",
                 "start_year",
+                "year",
                 "skill",
                 "interest",
                 "page",

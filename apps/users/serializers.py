@@ -618,5 +618,6 @@ class PublicProfileSearchSerializer(serializers.Serializer):
     university = serializers.CharField(required=False, allow_blank=True)
     major = serializers.CharField(required=False, allow_blank=True)
     start_year = serializers.IntegerField(required=False, min_value=1)
+    year = serializers.IntegerField(required=False, min_value=1)
     skill = serializers.CharField(required=False, allow_blank=True)
     interest = serializers.CharField(required=False, allow_blank=True)
