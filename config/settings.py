@@ -270,6 +270,14 @@ def resolve_frontend_url(value, debug):
 
 
 FRONTEND_URL = resolve_frontend_url(os.getenv("FRONTEND_URL"), DEBUG)
+FRONTEND_OPPORTUNITY_DETAIL_PATH = os.getenv(
+    "FRONTEND_OPPORTUNITY_DETAIL_PATH",
+    "/opportunities/{id}",
+).strip()
+FRONTEND_OPPORTUNITIES_PATH = os.getenv(
+    "FRONTEND_OPPORTUNITIES_PATH",
+    "/opportunities",
+).strip()
 EMAIL_HOST = os.getenv("EMAIL_HOST") or "smtp.gmail.com"
 EMAIL_PORT = int(os.getenv("EMAIL_PORT") or "587")
 EMAIL_HOST_USER = os.getenv("EMAIL_HOST_USER") or "teamup.kntu@gmail.com"

@@ -67,6 +67,64 @@ The API is available at <http://127.0.0.1:8000/>. The public health check is
 - OpenAPI schema: <http://127.0.0.1:8000/api/schema/>
 - ReDoc: <http://127.0.0.1:8000/api/redoc/>
 
+## Opportunity descriptions
+
+Opportunity descriptions are stored as HTML text so rich-text formatting is
+preserved. The database model does not render or sanitize this content. Before
+an API accepts or renders descriptions, that stage must validate and sanitize
+the allowed HTML tags, attributes, and link URLs.
+
+## Opportunity API
+
+- `GET /api/opportunities/` lists published opportunities for public discovery.
+- `POST /api/opportunities/` creates a Draft opportunity for the authenticated owner.
+- `GET /api/opportunities/<id>/` retrieves a published, owned, or allowed applicant-visible opportunity.
+- `PATCH /api/opportunities/<id>/` and `DELETE /api/opportunities/<id>/` are owner-only.
+- `POST /api/opportunities/<id>/publish/` publishes or reopens a Draft/Closed opportunity.
+- `POST /api/opportunities/<id>/close/` closes a Published opportunity.
+- `GET /api/opportunities/mine/` lists the authenticated user's opportunities.
+
+Public discovery accepts `search`, `category`, `skills`, `interests`, `min_hours`,
+`max_hours`, `page`, and `page_size`. Skill and interest filters accept comma-separated
+IDs (for example, `skills=1,2`) or repeated parameters (for example,
+`skills=1&skills=2`). Existing `PublicProfilePagination` conventions apply.
+
+Opportunity descriptions use Bleach allowlisting. Allowed tags are `h1` through
+`h6`, `p`, `br`, `strong`, `b`, `em`, `i`, `ul`, `ol`, `li`, and `a`. The only
+allowed link attributes are `href` and `title`; allowed link protocols are
+`http`, `https`, and `mailto`. Scripts, event-handler attributes, comments,
+unsafe tags, and unsafe URL schemes are removed.
+
+## Application API
+
+- `POST /api/opportunities/<id>/apply/` submits a Pending application to a Published opportunity.
+- `GET /api/applications/mine/` lists the authenticated user's applications.
+- `GET /api/opportunities/<id>/applications/` lists applicants for an opportunity owned by the authenticated user.
+- `POST /api/applications/<id>/withdraw/` withdraws the applicant's Pending application.
+- `POST /api/applications/<id>/accept/` accepts a Pending application for a Published opportunity.
+- `POST /api/applications/<id>/reject/` rejects a Pending application.
+
+Application lists use the standard `page` and `page_size` pagination parameters
+and optionally accept `status`. Only a Pending application can transition:
+applicants may withdraw their own, and the opportunity owner may accept or
+reject. Applicant list responses include only the applicant ID and display
+name; they do not expose email or other private account fields.
+
+Accepting or rejecting a Pending application sends the applicant a Persian
+email after the database transaction commits. Email uses the existing
+`EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`,
+`EMAIL_USE_TLS`, and `DEFAULT_FROM_EMAIL` settings. Keep SMTP credentials in
+the local `.env` or deployment secret store, never in source control.
+
+Status emails build absolute links from `FRONTEND_URL`,
+`FRONTEND_OPPORTUNITY_DETAIL_PATH` (supports `{id}`), and
+`FRONTEND_OPPORTUNITIES_PATH`. The current frontend router does not define
+opportunity detail or discovery routes, so the example paths
+`/opportunities/{id}` and `/opportunities` are provisional and must be
+confirmed or overridden before deployment. If the frontend URL is unset or a
+configured path is invalid, the status change still succeeds and delivery is
+skipped with an error log.
+
 ## Authentication and account endpoints
 
 Protected API endpoints use JWT authentication by default and require an access

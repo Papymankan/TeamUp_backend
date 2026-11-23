@@ -22,6 +22,8 @@ urlpatterns = [
     path("api/account/", include("apps.users.account_urls")),
     path("api/profile/", include("apps.users.profile_urls")),
     path("api/users/", include("apps.users.public_urls")),
+    path("api/opportunities/", include("apps.opportunities.urls")),
+    path("api/applications/", include("apps.applications.urls")),
     path("api/skills/", AvailableSkillListView.as_view(), name="available-skills"),
     path("api/interests/", AvailableInterestListView.as_view(), name="available-interests"),
     path("api/majors/", AvailableMajorListView.as_view(), name="available-majors"),
